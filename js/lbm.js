@@ -175,6 +175,9 @@ export class LBMEngine {
   /** Nondimensional time (chords traveled). */
   get tStar() { return this.iter * U_LAT / this.chord; }
 
+  /** Solver steps for the flow to travel one chord length. */
+  get stepsPerChord() { return this.chord / U_LAT; }
+
   destroy() {
     for (const b of [this.bufA, this.bufB, this.solidBuf, this.uni, this.forceBuf, this.stagingBuf]) b.destroy();
     this.macroTex.destroy();

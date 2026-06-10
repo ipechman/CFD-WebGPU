@@ -79,7 +79,7 @@
       <div class="row">
         <button id="btn-run" class="btn primary">&#9654; Run</button>
         <button id="btn-reset" class="btn">Reset</button>
-        <button id="btn-ff" class="btn" title="Advance 2000 steps without rendering">&#9193; 2000</button>
+        <button id="btn-ff" class="btn" title="Run until forces converge (caps at ~40 chords of travel)">&#9193; converge</button>
       </div>
       <div id="ff-progress" class="progress hidden"><div></div></div>
     </section>
@@ -112,6 +112,7 @@
       <canvas id="overlay-canvas"></canvas>
       <canvas id="colorbar" width="180" height="30"></canvas>
       <div id="hud" class="dim"></div>
+      <div id="probe-tip" class="hidden"></div>
       <div id="gpu-error" class="hidden">
         <h3>WebGPU not available</h3>
         <p>The LBM and Euler engines need WebGPU (Chrome/Edge 113+, Safari 18+, Firefox 141+).
@@ -189,7 +190,7 @@
           <h3>Trust guide</h3>
           <p>Cl from LBM/Euler: good (~5-15%) for attached flow. Cd: trust LBM only at Re &lt; ~1e5; at flight Reynolds numbers use the empirical estimate or wave-drag + friction. Staircase immersed boundaries cost ~5-15% accuracy - the "fine" grid helps. No transition modeling, no real-gas effects.</p>
           <h3>Tips</h3>
-          <p>Use <b>&#9193; 2000</b> to converge steady cases quickly. The &alpha;-sweep button builds a solver polar automatically. Mach &amp; angle changes apply live - watch shocks move. Custom airfoils: paste any UIUC-format .dat file.</p>
+          <p>Use <b>&#9193; converge</b> to run a case until forces settle - it stops automatically (cap ~40 chords of travel). The &alpha;-sweep runs each angle to convergence and pins the time-averaged result. <b>Hover</b> the flow field to probe local values (velocity, Cp, Mach, vorticity) and hover any plot for a crosshair readout. Mach &amp; angle changes apply live - watch shocks move. Custom airfoils: paste any UIUC-format .dat file.</p>
           <h3>Credits</h3>
           <p class="dim">Airfoil coordinates: UIUC Airfoil Coordinates Database (M. Selig). Wind-tunnel data: Abbott &amp; von Doenhoff (1959). RAE 2822: AGARD AR-138. Colormaps: matplotlib (polynomial fits by M. Zucker). Educational tool - not for engineering sign-off.</p>
         </div>
