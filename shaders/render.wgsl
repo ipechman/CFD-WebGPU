@@ -11,9 +11,9 @@ struct ViewParams {
   minf: f32,
   gamma: f32,
   bodyMix: f32,
-  pad0: f32,
-  pad1: f32,
-  pad2: f32,
+  vcx: f32,   // view center (uv space)
+  vcy: f32,
+  vzoom: f32, // 1 = full domain
 };
 
 @group(0) @binding(0) var<uniform> V: ViewParams;
@@ -73,7 +73,8 @@ fn colormap(t: f32, id: u32) -> vec3f {
 
 @fragment
 fn fsField(inp: VSOut) -> @location(0) vec4f {
-  let uv = inp.uv;
+  // screen uv -> world uv through the zoom view
+  let uv = vec2f(V.vcx, V.vcy) + (inp.uv - 0.5) / max(V.vzoom, 1.0);
   let texel = vec2f(1.0 / V.nx, 1.0 / V.ny);
   let m = textureSampleLevel(macroTex, smp, uv, 0.0);
   var s: f32 = 0.0;
@@ -137,6 +138,10 @@ struct PartParams {
   size: f32,    // half-size in pixels (clip conversion done in JS-provided scale)
   sx: f32,      // half-size in clip units x
   sy: f32,      // half-size in clip units y
+  vcx: f32,     // view center / zoom (match ViewParams)
+  vcy: f32,
+  vzoom: f32,
+  pad0: f32,
 };
 
 @group(0) @binding(0) var<uniform> PP: PartParams;
@@ -203,7 +208,9 @@ fn vsParticle(@builtin(vertex_index) vi: u32) -> PVSOut {
     vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
     vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
   let p = partsR[pi];
-  let clip = vec2f(p.x / PP.nx * 2.0 - 1.0, p.y / PP.ny * 2.0 - 1.0);
+  // world uv -> screen uv through the zoom view -> clip
+  let suv = (vec2f(p.x / PP.nx, p.y / PP.ny) - vec2f(PP.vcx, PP.vcy)) * max(PP.vzoom, 1.0) + 0.5;
+  let clip = suv * 2.0 - 1.0;
   var o: PVSOut;
   o.pos = vec4f(clip + off[corner] * vec2f(PP.sx, PP.sy), 0.0, 1.0);
   o.q = off[corner];

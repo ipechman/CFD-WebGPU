@@ -17,6 +17,7 @@ const state = {
   M: 0.10, Re: 2e5, alphaDeg: 4.0,
   engineSel: 'auto', res: [1280, 640],
   field: 0, cmap: 0, lo: 0, hi: 1.8, particles: true,
+  view: { cx: 0.5, cy: 0.5, zoom: 1 },
   running: false, speed: 6, busy: false, sweepCancel: false,
   history: [], pinned: [], converged: false, lastForces: null,
   panelRes: null, theoryRes: null, cpSample: null, polarCache: null, cpuEv: null,
@@ -167,6 +168,7 @@ function loop(now) {
       particles: state.particles && state.field !== 4,
       minf: Math.max(state.M, 0.05),
       partSpeed: Math.min(3, Math.max(0.8, 0.3 * state.speed)),
+      view: state.view,
     });
     frames++;
     if (now - lastFpsT > 1000) { fps = frames; frames = 0; lastFpsT = now; }
@@ -276,6 +278,7 @@ function bindUI() {
   new ResizeObserver(() => resizeCanvases()).observe(wrap);
   resizeCanvases();
   bindProbe();
+  bindZoom();
 }
 
 function bindSlider(id, valId, fmt, cb) {
@@ -618,6 +621,41 @@ async function sampleCp(manual = true) {
   }
 }
 
+// ============================================================ zoom view
+
+function clampView() {
+  const v = state.view;
+  v.zoom = Math.min(12, Math.max(1, v.zoom));
+  const half = 0.5 / v.zoom;
+  v.cx = Math.min(1 - half, Math.max(half, v.cx));
+  v.cy = Math.min(1 - half, Math.max(half, v.cy));
+}
+
+function resetView() {
+  state.view = { cx: 0.5, cy: 0.5, zoom: 1 };
+}
+
+function bindZoom() {
+  const wrap = $('canvas-wrap');
+  wrap.addEventListener('wheel', (e) => {
+    if (activeEngineKind() === 'theory') return; // zoom is GPU-view only
+    e.preventDefault();
+    const r = wrap.getBoundingClientRect();
+    const sx = (e.clientX - r.left) / r.width;
+    const sy = 1 - (e.clientY - r.top) / r.height; // uv space (y up)
+    const v = state.view;
+    const oldZoom = v.zoom;
+    v.zoom = Math.min(12, Math.max(1, v.zoom * Math.exp(-e.deltaY * 0.0015)));
+    // keep the world point under the cursor fixed
+    const wx = v.cx + (sx - 0.5) / oldZoom;
+    const wy = v.cy + (sy - 0.5) / oldZoom;
+    v.cx = wx - (sx - 0.5) / v.zoom;
+    v.cy = wy - (sy - 0.5) / v.zoom;
+    if (v.zoom <= 1.001) resetView(); else clampView();
+  }, { passive: false });
+  wrap.addEventListener('dblclick', () => resetView());
+}
+
 // ============================================================ hover probe
 
 const probe = { data: null, nx: 0, iter: -1, t: 0, pending: false };
@@ -657,8 +695,12 @@ function probeField(fx, fy) {
   if (!eng || !state.renderer) return null;
   refreshProbeData(eng);
   const { nx, ny, chord, origin, mask } = eng;
-  const i = Math.max(0, Math.min(nx - 1, Math.floor(fx * nx)));
-  const j = Math.max(0, Math.min(ny - 1, Math.floor((1 - fy) * ny))); // canvas y down, grid j up
+  // screen fraction -> world uv through the zoom view (canvas y down, grid j up)
+  const zv = state.view;
+  const uw = zv.cx + (fx - 0.5) / zv.zoom;
+  const vw = zv.cy + ((1 - fy) - 0.5) / zv.zoom;
+  const i = Math.max(0, Math.min(nx - 1, Math.floor(uw * nx)));
+  const j = Math.max(0, Math.min(ny - 1, Math.floor(vw * ny)));
   const idx = j * nx + i;
   const pos = `x/c ${((i + 0.5 - origin[0]) / chord).toFixed(2)}   y/c ${((j + 0.5 - origin[1]) / chord).toFixed(2)}`;
   if (mask && mask[idx]) return [pos, 'inside airfoil'];
@@ -883,8 +925,9 @@ function updateHUD() {
   }
   if (!eng) return;
   const conv = state.converged ? ` | converged (${state.convergedKind})` : '';
+  const zm = state.view.zoom > 1.01 ? ` | zoom x${state.view.zoom.toFixed(1)} (dbl-click resets)` : '';
   $('hud').textContent =
-    `${kind} ${eng.nx}x${eng.ny} | it ${eng.iter.toLocaleString()} | t* ${eng.tStar.toFixed(1)} | ${(fps * state.speed).toLocaleString()} steps/s | ${fps} fps${conv}`;
+    `${kind} ${eng.nx}x${eng.ny} | it ${eng.iter.toLocaleString()} | t* ${eng.tStar.toFixed(1)} | ${(fps * state.speed).toLocaleString()} steps/s | ${fps} fps${conv}${zm}`;
 }
 
 function resizeCanvases() {

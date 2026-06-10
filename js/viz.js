@@ -75,7 +75,7 @@ export class Renderer {
 
     r.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     r.viewUni = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    r.partUni = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    r.partUni = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     r.partBuf = device.createBuffer({ size: N_PARTICLES * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     r.frame = 0;
     return r;
@@ -141,22 +141,23 @@ export class Renderer {
     const { engine } = this;
     if (!engine) return;
     const { mode, cmap, lo, hi, particles, minf, partSpeed } = opts;
+    const zv = opts.view || { cx: 0.5, cy: 0.5, zoom: 1 };
     const dev = this.device;
     this.frame++;
 
     const vbuf = new ArrayBuffer(48);
     new Uint32Array(vbuf, 0, 2).set([mode, cmap]);
     new Float32Array(vbuf, 8, 10).set([
-      engine.nx, engine.ny, lo, hi, minf, 1.4, 1.0, 0, 0, 0,
+      engine.nx, engine.ny, lo, hi, minf, 1.4, 1.0, zv.cx, zv.cy, zv.zoom,
     ]);
     dev.queue.writeBuffer(this.viewUni, 0, vbuf);
 
-    const pbuf = new ArrayBuffer(32);
+    const pbuf = new ArrayBuffer(48);
     new Float32Array(pbuf, 0, 2).set([engine.nx, engine.ny]);
     new Uint32Array(pbuf, 8, 2).set([N_PARTICLES, this.frame]);
     const pxClipX = 2 / this.canvas.width * 1.6 * (window.devicePixelRatio || 1);
     const pxClipY = 2 / this.canvas.height * 1.6 * (window.devicePixelRatio || 1);
-    new Float32Array(pbuf, 16, 4).set([partSpeed || 1.5, 1.6, pxClipX, pxClipY]);
+    new Float32Array(pbuf, 16, 8).set([partSpeed || 1.5, 1.6, pxClipX, pxClipY, zv.cx, zv.cy, zv.zoom, 0]);
     dev.queue.writeBuffer(this.partUni, 0, pbuf);
 
     const enc = dev.createCommandEncoder();
