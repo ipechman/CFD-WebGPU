@@ -2,7 +2,7 @@
 // fused collision. Bounce-back solids, momentum-exchange force accumulation.
 // Lattice units: dx = dt = 1, cs^2 = 1/3. Inflow speed P.uin (~0.1).
 //
-// NOTE: tests/lbm_mirror.mjs contains a JS mirror of feq/collision/streaming.
+// NOTE: tests/lbm_tgv.mjs contains a JS mirror of feq/collision/streaming.
 // Keep the math in sync.
 
 struct Params {
@@ -52,6 +52,9 @@ fn init(@builtin(global_invocation_id) gid: vec3u) {
   for (var k = 0u; k < 9u; k++) {
     fout[k * P.ntot + idx] = feq(k, 1.0, u);
   }
+  // seed macro texture so the first rendered frame is sane
+  textureStore(macroTex, vec2i(i32(gid.x), i32(gid.y)),
+    vec4f(cos(P.alpha), sin(P.alpha), 1.0, 0.0));
 }
 
 @compute @workgroup_size(16, 16)

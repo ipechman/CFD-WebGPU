@@ -80,6 +80,14 @@ export class LBMEngine {
     return Math.max(0.5008, 3 * nu + 0.5);
   }
 
+  /** Re actually simulated after the tau stability clamp (honesty metric). */
+  get effectiveRe() {
+    return U_LAT * this.chord / ((this.tau - 0.5) / 3);
+  }
+  get reClamped() {
+    return this.effectiveRe < this.flow.Re * 0.97;
+  }
+
   writeUniforms() {
     const { alphaDeg } = this.flow;
     const ramp = Math.min(1, this.iter / RAMP_STEPS);

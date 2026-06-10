@@ -194,15 +194,18 @@ export function evaluateCase(ctx, results) {
   add({
     name: 'Engine validity', computed: NaN, reference: NaN, delta: NaN, status: 'info',
     refSource: '',
-    note: trustNote(engine, M, Re),
+    note: trustNote(engine, M, Re, ctx.effRe),
   });
 
   return rows;
 }
 
-export function trustNote(engine, M, Re) {
+export function trustNote(engine, M, Re, effRe) {
   if (engine === 'lbm') {
     let n = 'LBM (viscous, LES): good for flow structure, Cl, vortex shedding at M<0.3. ';
+    if (effRe && effRe < Re * 0.97) {
+      n += `NOTE: viscosity is stability-clamped on this grid - you requested Re=${Re.toExponential(1)} but the resolved Re is ~${effRe.toExponential(1)} plus LES subgrid effects. Use a finer grid or trust Cl trends only. `;
+    }
     n += Re > 1e5 ? `At Re=${Re.toExponential(1)} the boundary layer is under-resolved: Cd indicative, stall angle approximate.`
       : 'At this Re the simulation is well resolved.';
     return n;

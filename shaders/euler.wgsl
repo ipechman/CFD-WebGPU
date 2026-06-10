@@ -5,7 +5,7 @@
 //
 // Nondimensionalization: rho_inf = 1, a_inf = 1  =>  p_inf = 1/gamma, U_inf = M.
 //
-// NOTE: tests/hllc_mirror.mjs contains a JS mirror of prim/cons/flux/hllc.
+// NOTE: tests/hllc_sod.mjs contains a JS mirror of prim/cons/flux/hllc.
 // Keep the math in sync.
 
 struct Params {
@@ -61,7 +61,8 @@ fn fluxPhys(W: vec4f, ax: u32) -> vec4f {
 
 // HLLC flux for primitive states L, R across a face with normal along axis ax.
 fn hllc(L: vec4f, R: vec4f, ax: u32) -> vec4f {
-  var unL: f32; var unR: f32;
+  var unL: f32;
+  var unR: f32;
   if (ax == 0u) { unL = L.y; unR = R.y; } else { unL = L.z; unR = R.z; }
   let g = P.gamma;
   let aL = sqrt(g * L.w / L.x);
@@ -102,13 +103,14 @@ fn minmod(a: vec4f, b: vec4f) -> vec4f {
 // Sample primitive state at offset along sweep axis; flags solid/ghost cells.
 // W0: querying (fluid) cell's primitives, used for solid mirroring.
 fn sampleW(x: i32, y: i32, off: i32, W0: vec4f, isGhost: ptr<function, bool>) -> vec4f {
-  var px = x; var py = y;
+  var px = x;
+  var py = y;
   if (P.axis == 0u) { px += off; } else { py += off; }
   *isGhost = false;
   if (px < 0 || py < 0 || py >= i32(P.ny)) { *isGhost = true; return freestream(); }
   if (px >= i32(P.nx)) {
     *isGhost = true;
-    return prim(Uin[u32(py) * P.nx + u32(P.nx - 1u)]); // outflow: zero gradient
+    return prim(Uin[u32(py) * P.nx + (P.nx - 1u)]); // outflow: zero gradient
   }
   let idx = u32(py) * P.nx + u32(px);
   if (solid[idx] == 1u) {
@@ -124,6 +126,9 @@ fn sampleW(x: i32, y: i32, off: i32, W0: vec4f, isGhost: ptr<function, bool>) ->
 fn init(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= P.nx || gid.y >= P.ny) { return; }
   Uout[gid.y * P.nx + gid.x] = cons(freestream());
+  // seed macro texture so the first rendered frame is sane
+  textureStore(macroTex, vec2i(i32(gid.x), i32(gid.y)),
+    vec4f(cos(P.alpha), sin(P.alpha), 1.0, 0.0));
 }
 
 @compute @workgroup_size(16, 16)
@@ -142,7 +147,10 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   }
 
   let W0 = prim(Uin[idx]);
-  var gm2: bool; var gm1: bool; var gp1: bool; var gp2: bool;
+  var gm2: bool;
+  var gm1: bool;
+  var gp1: bool;
+  var gp2: bool;
   let Wm2 = sampleW(x, y, -2, W0, &gm2);
   let Wm1 = sampleW(x, y, -1, W0, &gm1);
   let Wp1 = sampleW(x, y, 1, W0, &gp1);
@@ -170,29 +178,33 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   Uout[idx] = U1;
 
   // --- wall force accumulation (pressure from HLLC star state at wall faces) ---
-  var sxp = false; var sxm = false;
   if (P.axis == 0u) {
+    var sxp = false;
+    var sxm = false;
     if (x + 1 < i32(P.nx)) { sxp = solid[idx + 1u] == 1u; }
     if (x - 1 >= 0) { sxm = solid[idx - 1u] == 1u; }
     if (sxp || sxm) {
-      var fx = 0.0; var tz = 0.0;
+      var fx = 0.0;
+      var tz = 0.0;
       if (sxp) { // body at +x: wall pressure = x-momentum flux component
         fx += FR.y;
-        tz += (f32(x) + 1.0 - P.cmx) * 0.0 - (f32(y) + 0.5 - P.cmy) * FR.y;
+        tz += -(f32(y) + 0.5 - P.cmy) * FR.y;
       }
       if (sxm) {
         fx -= FL.y;
-        tz -= (f32(x) - P.cmx) * 0.0 - (f32(y) + 0.5 - P.cmy) * FL.y;
+        tz += (f32(y) + 0.5 - P.cmy) * FL.y;
       }
       atomicAdd(&forceAcc[0], i32(round(fx * P.fscale)));
       atomicAdd(&forceAcc[2], i32(round(tz * P.fscale * 0.01)));
     }
   } else {
-    var syp = false; var sym = false;
+    var syp = false;
+    var sym = false;
     if (y + 1 < i32(P.ny)) { syp = solid[idx + P.nx] == 1u; }
     if (y - 1 >= 0) { sym = solid[idx - P.nx] == 1u; }
     if (syp || sym) {
-      var fy = 0.0; var tz = 0.0;
+      var fy = 0.0;
+      var tz = 0.0;
       if (syp) {
         fy += FR.z;
         tz += (f32(x) + 0.5 - P.cmx) * FR.z;

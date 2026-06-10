@@ -104,10 +104,12 @@ async function rebuildEngineInner() {
   $('engine-badge').textContent = kind.toUpperCase();
   updateRegimeLabel();
 
+  const gpuButtons = ['btn-run', 'btn-reset', 'btn-ff', 'btn-sweep', 'btn-sample-cp'];
   if (kind === 'theory') {
     if (state.engine) { state.engine.destroy(); state.engine = null; }
     $('gpu-canvas').classList.add('hidden');
     $('cpu-canvas').classList.remove('hidden');
+    for (const id of gpuButtons) $(id).disabled = true;
     populateFields('theory');
     renderCPUSoon();
     resetRun();
@@ -116,6 +118,7 @@ async function rebuildEngineInner() {
 
   $('gpu-canvas').classList.remove('hidden');
   $('cpu-canvas').classList.add('hidden');
+  for (const id of gpuButtons) $(id).disabled = false;
 
   const [nx, ny] = state.res;
   if (state.engine && state.engine.type === kind && state.engine.nx === nx) {
@@ -192,15 +195,28 @@ async function sampleForces() {
 
 function checkConvergence() {
   const h = state.history.filter(s => s.settled);
-  if (h.length < 20) { state.converged = false; return; }
+  if (h.length < 20) { state.converged = false; state.convergedKind = null; return; }
   const w = h.slice(-20);
   const mean = w.reduce((a, s) => a + s.cl, 0) / w.length;
   const sd = Math.sqrt(w.reduce((a, s) => a + (s.cl - mean) ** 2, 0) / w.length);
   const wasConverged = state.converged;
-  state.converged = sd / Math.max(Math.abs(mean), 0.05) < 0.012;
+
+  // steady convergence: tiny scatter
+  const steady = sd / Math.max(Math.abs(mean), 0.05) < 0.012;
+  // statistical stationarity (unsteady flows, e.g. vortex shedding): the
+  // running mean has stopped drifting even though samples oscillate
+  let stationary = false;
+  if (!steady && h.length >= 40) {
+    const a = h.slice(-40, -20), b = w;
+    const ma = a.reduce((x, s) => x + s.cl, 0) / a.length;
+    stationary = Math.abs(ma - mean) / Math.max(Math.abs(mean), 0.05) < 0.02;
+  }
+  state.converged = steady || stationary;
+  state.convergedKind = steady ? 'steady' : stationary ? 'time-averaged' : null;
   if (state.converged && !wasConverged) {
-    setStatus(`Converged: Cl=${mean.toFixed(3)} (sigma ${(sd).toFixed(4)}). Validation updated.`);
+    setStatus(`Converged (${state.convergedKind}): Cl=${mean.toFixed(3)} (sigma ${sd.toFixed(4)}). Validation updated.`);
     refreshValidation();
+    if (!state.busy) sampleCp(false).catch(() => {}); // auto-refresh surface pressure plot
   }
 }
 
@@ -442,6 +458,9 @@ function updateResultsDisplay() {
       const fr = frictionDrag(state.Re, geomInfo(state.coords).tc, state.M);
       src += ` | inviscid: add Cd0~${fr.cd0.toFixed(4)} friction for total drag`;
     }
+    if (kind === 'lbm' && state.engine && state.engine.reClamped) {
+      src += ` | grid-limited: resolved Re ~ ${fmtRe(state.engine.effectiveRe)}`;
+    }
   }
   $('out-cl').textContent = r && Number.isFinite(r.cl) ? r.cl.toFixed(3) : '-';
   $('out-cd').textContent = r && Number.isFinite(r.cd) ? r.cd.toFixed(4) : '-';
@@ -562,10 +581,10 @@ function drawConvSparkline() {
 
 // ============================================================ Cp sampling
 
-async function sampleCp() {
+async function sampleCp(manual = true) {
   const eng = state.engine;
-  if (!eng || !state.renderer) { setStatus('Cp sampling needs a running LBM/Euler engine.'); return; }
-  setStatus('Sampling surface pressure...');
+  if (!eng || !state.renderer) { if (manual) setStatus('Cp sampling needs a running LBM/Euler engine.'); return; }
+  if (manual) setStatus('Sampling surface pressure...');
   const macro = await state.renderer.readMacro();
   const { nx, ny, chord, origin, mask } = eng;
   const U = [], L = [];
@@ -583,8 +602,10 @@ async function sampleCp() {
   U.sort((a, b) => a[0] - b[0]); L.sort((a, b) => a[0] - b[0]);
   state.cpSample = { U, L };
   updateCpChart();
-  setStatus(`Sampled ${U.length + L.length} surface points from the ${eng.type.toUpperCase()} field.`);
-  if (!isTabActive('plots')) document.querySelector('[data-tab="plots"]').click();
+  if (manual) {
+    setStatus(`Sampled ${U.length + L.length} surface points from the ${eng.type.toUpperCase()} field.`);
+    if (!isTabActive('plots')) document.querySelector('[data-tab="plots"]').click();
+  }
 }
 
 // ============================================================ fast-forward & sweep
@@ -687,7 +708,11 @@ function refreshValidation() {
   let rows = [];
   try {
     rows = evaluateCase(
-      { airfoilId: state.airfoilId, coords: state.coords, M: state.M, Re: state.Re, alphaDeg: state.alphaDeg, engine: kind },
+      {
+        airfoilId: state.airfoilId, coords: state.coords, M: state.M, Re: state.Re,
+        alphaDeg: state.alphaDeg, engine: kind,
+        effRe: (kind === 'lbm' && state.engine) ? state.engine.effectiveRe : null,
+      },
       { solver, panel: state.panelRes, theory: state.theoryRes });
   } catch (e) { console.error(e); }
   tbody.innerHTML = '';
@@ -746,7 +771,7 @@ function updateHUD() {
     return;
   }
   if (!eng) return;
-  const conv = state.converged ? ' | converged' : '';
+  const conv = state.converged ? ` | converged (${state.convergedKind})` : '';
   $('hud').textContent =
     `${kind} ${eng.nx}x${eng.ny} | it ${eng.iter.toLocaleString()} | t* ${eng.tStar.toFixed(1)} | ${(fps * state.speed).toLocaleString()} steps/s | ${fps} fps${conv}`;
 }
