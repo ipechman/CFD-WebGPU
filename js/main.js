@@ -846,8 +846,9 @@ async function alphaSweep() {
       state.alphaDeg = a;
       $('alpha-slider').value = a;
       $('alpha-val').textContent = a.toFixed(1) + '°';
+      // warm start: keep the previous alpha's field (converges in a fraction
+      // of the chords a cold start needs; wind tunnels sweep continuously too)
       eng.setFlow(state.M, state.Re, a);
-      eng.reset();
       state.history = [];
       state.converged = false;
       const hit = await runToConvergence(30, true, label);

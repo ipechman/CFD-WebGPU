@@ -208,7 +208,7 @@ export function evaluateCase(ctx, results) {
       add({
         name: 'Cl vs RAE 2822 Case 6', computed: solver.cl, reference: RAE2822_CASE6.cl,
         refSource: RAE2822_CASE6.source, delta: dl, status: status(dl, 15, 30),
-        note: 'Classic transonic benchmark (M=0.725, a=2.31 deg corrected). Euler + staircase boundary: expect ~10-20% high.',
+        note: 'Classic transonic benchmark (M=0.725, a=2.31 deg corrected). Inviscid Euler reads ~10% low here at the default grid (no viscous decambering match).',
       });
     } else {
       add({
@@ -261,7 +261,7 @@ export function trustNote(engine, M, Re, effRe) {
   }
   if (engine === 'euler') {
     if (M < 0.5) return 'Euler (inviscid, ghost-fluid surface): no boundary layer, so no friction drag and no stall. Cl validated within ~2% of panel+PG at M0.5; residual numerical Cd ~0.01-0.02 (use empirical Cd0 for real drag).';
-    if (M < 1.15) return 'Transonic Euler (ghost-fluid surface): shocks and lift validated (~1% on RAE 2822 Case 6 Cl at default grid); wave drag approximate (~2x on that case), expect mild buffet near M~1.';
+    if (M < 1.15) return 'Transonic Euler (ghost-fluid surface): shocks captured; Cl ~10% low on RAE 2822 Case 6 (M0.725, a2.31) at the default grid; wave drag approximate, expect mild buffet near M~1.';
     if (M <= 4) return 'Supersonic Euler: shocks and wave drag well captured; compare with Ackeret/shock-expansion rows above.';
     return 'M>4: calorically perfect gas assumed (no real-gas/chemistry effects -> real stagnation temperatures lower). Treat as qualitative hypersonic.';
   }

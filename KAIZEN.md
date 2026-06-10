@@ -5,6 +5,18 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.10 — 2026-06-10
+- Honesty: re-measured RAE 2822 **at the true Case 6 angle** (α=2.31 corrected,
+  via the new URL hash): Cl 0.668 vs 0.743 — 10.1% low, passes the 15% band.
+  The v0.1.7 "1.3% off Case 6" figure was taken at α2.9 (wrong angle); the
+  changelog, trust notes, and validation row note are corrected.
+- Add: **α-sweep warm starts** — each angle continues from the previous
+  converged field instead of resetting. Measured at M2 (diamond): ~7.5-8
+  chords/point, comparable to cold starts (supersonic transients exit fast);
+  main benefit is LBM (skips the 600-step inflow re-ramp) and the pinned
+  polar matches theory exactly (α2 0.081 vs Ackeret 0.0806, α4 0.163 vs
+  exact 0.1634, α0 symmetric 0.000).
+
 ### v0.1.9 — 2026-06-10
 - Add: **URL state sharing** — the hash tracks airfoil/M/Re/α/engine/grid
   (`#af=rae2822&m=0.73&...`), restored on load; copy the address-bar link to
@@ -28,7 +40,9 @@ Add new entries at the top of the changelog; pull backlog items from the list be
   pressure quadrature (the face flux now carries physical slip terms).
   Measured at the default grid:
   - NACA 2412 M0.5 α4: Cl 0.513 → **0.864** vs 0.849 panel+PG (40% low → 1.8%)
-  - RAE 2822 Case 6: Cl 0.221 → **0.753** vs 0.743 exp (70% low → 1.3%)
+  - RAE 2822 M0.73 α2.9: Cl 0.221 → **0.753** (same-α A/B). *Correction
+    (v0.1.10): at the true Case 6 angle (α=2.31) Cl is 0.668 vs 0.743 exp —
+    10.1% low, passes; the earlier "1.3% off Case 6" read used α2.9.*
   - Diamond M2 α4: Cl **0.163** vs 0.1634 exact (0.2%); wave Cd 0.058 →
     **0.0259** vs 0.0265 exact (120% high → 2.3%)
   - All cases now converge *steady* (was time-averaged/oscillatory); M6 and
