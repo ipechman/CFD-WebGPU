@@ -5,6 +5,22 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.7 — 2026-06-10
+- Add: **ghost-fluid boundary with true surface normals** for the Euler engine
+  (backlog #1). The rasterizer encodes the nearest-outline normal into each
+  boundary solid cell; ghost states reflect velocity about the actual surface
+  tangent instead of the sweep axis. Wall forces switch to staircase-face
+  pressure quadrature (the face flux now carries physical slip terms).
+  Measured at the default grid:
+  - NACA 2412 M0.5 α4: Cl 0.513 → **0.864** vs 0.849 panel+PG (40% low → 1.8%)
+  - RAE 2822 Case 6: Cl 0.221 → **0.753** vs 0.743 exp (70% low → 1.3%)
+  - Diamond M2 α4: Cl **0.163** vs 0.1634 exact (0.2%); wave Cd 0.058 →
+    **0.0259** vs 0.0265 exact (120% high → 2.3%)
+  - All cases now converge *steady* (was time-averaged/oscillatory); M6 and
+    the live Mach-scrub gauntlet remain stable. LBM results bit-identical.
+- Docs: retired the now-false "staircase Kutta deficit / 2x wave drag" notes
+  in validation + Help; trust guide updated with the new validated numbers.
+
 ### v0.1.6 — 2026-06-10
 - Add: **scroll-wheel zoom** on the flow view (cursor-anchored, 1-12×,
   double-click resets; HUD shows the factor). The hover probe maps through the
@@ -81,7 +97,8 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Backlog (small, prioritized)
 
-1. **Cut-cell boundary** (or ghost-fluid with true normals) to replace staircase walls — biggest single accuracy win. Measured need: subsonic Euler Cl 30-40% low, supersonic wave drag ~2x on thin sharp sections; both scale ~1/N with resolution.
+1. **LBM curved boundary** (interpolated bounce-back, Bouzidi) — Euler got ghost-fluid normals in v0.1.7; LBM still uses staircase bounce-back (Cl ~15-20% high vs A&vD at default grid).
+2. **Residual Euler numerical drag** (~0.01-0.02 at subsonic/transonic) — entropy generation at the staircase quadrature; cut cells or higher-order wall pressure would shrink it.
 3. **URL state sharing** — encode airfoil/M/Re/α in the hash for shareable cases.
 4. **Local time stepping** for steady Euler cases (3–5× faster convergence).
 5. **LBM wall function** or grid refinement near the surface for better high-Re Cd.

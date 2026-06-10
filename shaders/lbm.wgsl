@@ -65,7 +65,7 @@ fn step_lbm(@builtin(global_invocation_id) gid: vec3u) {
   let idx = y * P.nx + x;
   let N = P.ntot;
 
-  if (solid[idx] == 1u) {
+  if (solid[idx] != 0u) {
     for (var k = 0u; k < 9u; k++) { fout[k * N + idx] = fin[k * N + idx]; }
     textureStore(macroTex, vec2i(i32(x), i32(y)), vec4f(0.0, 0.0, 1.0, 0.0));
     return;
@@ -88,7 +88,7 @@ fn step_lbm(@builtin(global_invocation_id) gid: vec3u) {
       f[k] = fin[k * N + idx];                  // outflow: zero-gradient-ish
     } else {
       let sidx = u32(sy) * P.nx + u32(sx);
-      if (solid[sidx] == 1u) {
+      if (solid[sidx] != 0u) {
         let fbb = fin[OPP[k] * N + idx];        // bounce-back
         f[k] = fbb;
         // momentum to body from this link: -2 * e_k * f_opp_post

@@ -114,6 +114,15 @@ fn minmod(a: vec4f, b: vec4f) -> vec4f {
   return s * max(vec4f(0.0), min(abs(a), s * b));
 }
 
+// Wall force: staircase-face quadrature of the adjacent fluid static
+// pressure (zero-order wall extrapolation). With true-normal ghosts the
+// face flux carries convective slip terms, and an axis-mirrored star
+// pressure would turn the (physical) tangential slip into spurious ram
+// pressure on every staircase step - plain cell pressure is consistent.
+fn wallP(W0: vec4f, ax: u32) -> f32 {
+  return W0.w;
+}
+
 // 1D characteristic far-field along the sweep axis (Riemann invariants).
 // Wi = boundary-adjacent interior primitives; sgn = outward normal sign.
 // Subsonic boundaries absorb outgoing waves instead of reflecting them
@@ -166,10 +175,24 @@ fn sampleW(x: i32, y: i32, off: i32, W0: vec4f, isGhost: ptr<function, bool>) ->
   if (py < 0) { *isGhost = true; return farfield(prim(Uin[u32(x)]), -1.0); }
   if (py >= i32(P.ny)) { *isGhost = true; return farfield(prim(Uin[(P.ny - 1u) * P.nx + u32(x)]), 1.0); }
   let idx = u32(py) * P.nx + u32(px);
-  if (solid[idx] == 1u) {
+  let sv = solid[idx];
+  if (sv != 0u) {
     *isGhost = true;
-    var Wm = W0; // slip-wall mirror of the querying cell
-    if (P.axis == 0u) { Wm.y = -W0.y; } else { Wm.z = -W0.z; }
+    var Wm = W0; // slip-wall ghost of the querying cell
+    if (sv >= 2u) {
+      // boundary cell carries the true outline normal (see rasterize):
+      // reflect velocity about the actual surface tangent instead of the
+      // sweep axis - the staircase mirror weakens the Kutta condition
+      let th = f32(sv - 2u) / 1019.0 * 6.28318531 - 3.14159265;
+      let n = vec2f(cos(th), sin(th));
+      let un = W0.y * n.x + W0.z * n.y;
+      Wm.y = W0.y - 2.0 * un * n.x;
+      Wm.z = W0.z - 2.0 * un * n.y;
+    } else if (P.axis == 0u) {
+      Wm.y = -W0.y;
+    } else {
+      Wm.z = -W0.z;
+    }
     return Wm;
   }
   return prim(Uin[idx]);
@@ -191,7 +214,7 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= P.nx || gid.y >= P.ny) { return; }
   let idx = gid.y * P.nx + gid.x;
 
-  if (solid[idx] == 1u) {
+  if (solid[idx] != 0u) {
     Uout[idx] = Uin[idx];
     if (P.writeMacro == 1u) {
       textureStore(macroTex, vec2i(x, y), vec4f(0.0, 0.0, 1.0, 0.0));
@@ -238,18 +261,19 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   if (P.axis == 0u) {
     var sxp = false;
     var sxm = false;
-    if (x + 1 < i32(P.nx)) { sxp = solid[idx + 1u] == 1u; }
-    if (x - 1 >= 0) { sxm = solid[idx - 1u] == 1u; }
+    if (x + 1 < i32(P.nx)) { sxp = solid[idx + 1u] != 0u; }
+    if (x - 1 >= 0) { sxm = solid[idx - 1u] != 0u; }
     if (sxp || sxm) {
       var fx = 0.0;
       var tz = 0.0;
-      if (sxp) { // body at +x: wall pressure = x-momentum flux component
-        fx += FR.y;
-        tz += -(f32(y) + 0.5 - P.cmy) * FR.y;
+      let pw = wallP(W0, 0u);
+      if (sxp) { // body at +x
+        fx += pw;
+        tz += -(f32(y) + 0.5 - P.cmy) * pw;
       }
       if (sxm) {
-        fx -= FL.y;
-        tz += (f32(y) + 0.5 - P.cmy) * FL.y;
+        fx -= pw;
+        tz += (f32(y) + 0.5 - P.cmy) * pw;
       }
       atomicAdd(&forceAcc[0], i32(round(fx * P.fscale)));
       atomicAdd(&forceAcc[2], i32(round(tz * P.fscale * 0.01)));
@@ -257,18 +281,19 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   } else {
     var syp = false;
     var sym = false;
-    if (y + 1 < i32(P.ny)) { syp = solid[idx + P.nx] == 1u; }
-    if (y - 1 >= 0) { sym = solid[idx - P.nx] == 1u; }
+    if (y + 1 < i32(P.ny)) { syp = solid[idx + P.nx] != 0u; }
+    if (y - 1 >= 0) { sym = solid[idx - P.nx] != 0u; }
     if (syp || sym) {
       var fy = 0.0;
       var tz = 0.0;
+      let pw = wallP(W0, 1u);
       if (syp) {
-        fy += FR.z;
-        tz += (f32(x) + 0.5 - P.cmx) * FR.z;
+        fy += pw;
+        tz += (f32(x) + 0.5 - P.cmx) * pw;
       }
       if (sym) {
-        fy -= FL.z;
-        tz -= (f32(x) + 0.5 - P.cmx) * FL.z;
+        fy -= pw;
+        tz -= (f32(x) + 0.5 - P.cmx) * pw;
       }
       atomicAdd(&forceAcc[1], i32(round(fy * P.fscale)));
       atomicAdd(&forceAcc[2], i32(round(tz * P.fscale * 0.01)));

@@ -198,7 +198,10 @@ export function resample(coords, n = 70) {
 // ---------------------------------------------------------------- rasterization
 
 /**
- * Rasterize airfoil onto grid. Returns Uint32Array(nx*ny), 1 = solid.
+ * Rasterize airfoil onto grid. Returns Uint32Array(nx*ny):
+ *   0 = fluid, 1 = interior solid,
+ *   2..1021 = boundary solid carrying the true outline-normal angle,
+ *   quantized over [0, 2pi) as value-2 in 1019 steps (ghost-fluid mirror).
  * chordPx: chord length in cells; (ox, oy): LE position in cells.
  * Scanline fill + edge dilation (guarantees min ~1.5 cell thickness, closed body).
  */
@@ -232,6 +235,25 @@ export function rasterize(coords, nx, ny, chordPx, ox, oy) {
       const ddx = px - t * dx, ddy = py - t * dy;
       if (ddx * ddx + ddy * ddy < rad * rad) mask[j * nx + i] = 1;
     }
+  }
+  // encode true surface normals into boundary solid cells (any solid cell
+  // with a fluid 4-neighbor): nearest outline segment's perpendicular
+  for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+    const idx = j * nx + i;
+    if (!mask[idx]) continue;
+    if (mask[idx - 1] && mask[idx + 1] && mask[idx - nx] && mask[idx + nx]) continue;
+    const px = i + 0.5, py = j + 0.5;
+    let best = Infinity, pnx = 0, pny = 1;
+    for (let k = 0; k < m; k++) {
+      const [x1, y1] = poly[k], [x2, y2] = poly[k + 1];
+      const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1e-12;
+      const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / L2));
+      const ddx = px - (x1 + t * dx), ddy = py - (y1 + t * dy);
+      const d = ddx * ddx + ddy * ddy;
+      if (d < best) { best = d; pnx = -dy; pny = dx; } // perpendicular; sign irrelevant for reflection
+    }
+    const th = Math.atan2(pny, pnx); // [-pi, pi]
+    mask[idx] = 2 + Math.round((th + Math.PI) / (2 * Math.PI) * 1019);
   }
   return mask;
 }
