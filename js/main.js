@@ -6,7 +6,7 @@ import { quickEstimate, ackeret, karmanTsien, prandtlGlauert, frictionDrag } fro
 import { LBMEngine } from './lbm.js';
 import { EulerEngine } from './euler.js';
 import { Renderer, FIELDS, drawColorbar } from './viz.js';
-import { renderCPUFlow } from './cpuflow.js';
+import { renderCPUFlow, CPU_VIEW } from './cpuflow.js';
 import { plot, exportCSV } from './charts.js';
 import { evaluateCase, EXP_DATA } from './validation.js';
 
@@ -19,7 +19,7 @@ const state = {
   field: 0, cmap: 0, lo: 0, hi: 1.8, particles: true,
   running: false, speed: 6, busy: false, sweepCancel: false,
   history: [], pinned: [], converged: false, lastForces: null,
-  panelRes: null, theoryRes: null, cpSample: null, polarCache: null,
+  panelRes: null, theoryRes: null, cpSample: null, polarCache: null, cpuEv: null,
   device: null, engine: null, renderer: null, shaders: {},
 };
 
@@ -275,6 +275,7 @@ function bindUI() {
   const wrap = $('canvas-wrap');
   new ResizeObserver(() => resizeCanvases()).observe(wrap);
   resizeCanvases();
+  bindProbe();
 }
 
 function bindSlider(id, valId, fmt, cb) {
@@ -581,11 +582,20 @@ function drawConvSparkline() {
 
 // ============================================================ Cp sampling
 
+// Serialized macro readbacks: the probe and Cp sampling share one staging
+// buffer, and a second mapAsync on a pending buffer rejects.
+let macroChain = Promise.resolve();
+function readMacroQueued() {
+  const p = macroChain.then(() => state.renderer.readMacro());
+  macroChain = p.then(() => {}, () => {});
+  return p;
+}
+
 async function sampleCp(manual = true) {
   const eng = state.engine;
   if (!eng || !state.renderer) { if (manual) setStatus('Cp sampling needs a running LBM/Euler engine.'); return; }
   if (manual) setStatus('Sampling surface pressure...');
-  const macro = await state.renderer.readMacro();
+  const macro = await readMacroQueued();
   const { nx, ny, chord, origin, mask } = eng;
   const U = [], L = [];
   for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
@@ -606,6 +616,80 @@ async function sampleCp(manual = true) {
     setStatus(`Sampled ${U.length + L.length} surface points from the ${eng.type.toUpperCase()} field.`);
     if (!isTabActive('plots')) document.querySelector('[data-tab="plots"]').click();
   }
+}
+
+// ============================================================ hover probe
+
+const probe = { data: null, nx: 0, iter: -1, t: 0, pending: false };
+
+function bindProbe() {
+  const wrap = $('canvas-wrap');
+  const tip = $('probe-tip');
+  wrap.addEventListener('mousemove', (e) => {
+    const r = wrap.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    const lines = activeEngineKind() === 'theory'
+      ? probeTheory(mx / r.width, my / r.height)
+      : probeField(mx / r.width, my / r.height);
+    if (!lines) { tip.classList.add('hidden'); return; }
+    tip.textContent = lines.join('\n');
+    tip.classList.remove('hidden');
+    tip.style.left = `${Math.min(mx + 14, r.width - tip.offsetWidth - 6)}px`;
+    tip.style.top = `${Math.min(my + 14, r.height - tip.offsetHeight - 6)}px`;
+  });
+  wrap.addEventListener('mouseleave', () => tip.classList.add('hidden'));
+}
+
+function probeTheory(fx, fy) {
+  const ev = state.cpuEv;
+  if (!ev) return null;
+  const x = CPU_VIEW.X0 + fx * (CPU_VIEW.X1 - CPU_VIEW.X0);
+  const y = CPU_VIEW.Y1 - fy * (CPU_VIEW.Y1 - CPU_VIEW.Y0);
+  const pos = `x/c ${x.toFixed(2)}   y/c ${y.toFixed(2)}`;
+  if (ev.inside(x, y)) return [pos, 'inside airfoil'];
+  const [u, v] = ev.velocity(x, y);
+  const V = Math.hypot(u, v);
+  return [pos, `|V|/U  ${V.toFixed(3)}`, `Cp     ${(1 - V * V).toFixed(3)}`];
+}
+
+function probeField(fx, fy) {
+  const eng = state.engine;
+  if (!eng || !state.renderer) return null;
+  refreshProbeData(eng);
+  const { nx, ny, chord, origin, mask } = eng;
+  const i = Math.max(0, Math.min(nx - 1, Math.floor(fx * nx)));
+  const j = Math.max(0, Math.min(ny - 1, Math.floor((1 - fy) * ny))); // canvas y down, grid j up
+  const idx = j * nx + i;
+  const pos = `x/c ${((i + 0.5 - origin[0]) / chord).toFixed(2)}   y/c ${((j + 0.5 - origin[1]) / chord).toFixed(2)}`;
+  if (mask && mask[idx]) return [pos, 'inside airfoil'];
+  const d = probe.data;
+  if (!d || probe.nx !== nx) return [pos, 'sampling...'];
+  const u = d[idx * 4], v = d[idx * 4 + 1], rho = d[idx * 4 + 2], cp = d[idx * 4 + 3];
+  const V = Math.hypot(u, v);
+  const lines = [pos, `|V|/U  ${V.toFixed(3)}`, `Cp     ${cp.toFixed(3)}`];
+  if (eng.type === 'euler') {
+    // mirror render.wgsl: p/p_inf from Cp, T_hat = p_hat/rho, M_loc = |V| M_inf / sqrt(T_hat)
+    const M = Math.max(state.M, 0.05);
+    const pr = 1 + 0.7 * M * M * cp;
+    const That = Math.max(pr, 1e-4) / Math.max(rho, 1e-4);
+    lines.push(`rho    ${rho.toFixed(3)}`, `M_loc  ${(V * M / Math.sqrt(That)).toFixed(2)}`);
+  } else if (i > 0 && i < nx - 1 && j > 0 && j < ny - 1) {
+    const dvdx = (d[(idx + 1) * 4 + 1] - d[(idx - 1) * 4 + 1]) * 0.5;
+    const dudy = (d[(idx + nx) * 4] - d[(idx - nx) * 4]) * 0.5;
+    lines.push(`vort   ${(dvdx - dudy).toFixed(3)}`);
+  }
+  return lines;
+}
+
+/** Refresh the cached macro field at most every 250 ms, only when the sim advanced. */
+function refreshProbeData(eng) {
+  const fresh = probe.nx === eng.nx && probe.iter === eng.iter;
+  if (probe.pending || fresh || performance.now() - probe.t < 250) return;
+  probe.pending = true;
+  const iterAt = eng.iter;
+  readMacroQueued().then((d) => {
+    probe.data = d; probe.nx = eng.nx; probe.iter = iterAt; probe.t = performance.now();
+  }).catch(() => {}).finally(() => { probe.pending = false; });
 }
 
 // ============================================================ fast-forward & sweep
@@ -841,7 +925,7 @@ const renderCPUSoon = debounce(() => {
   if (activeEngineKind() !== 'theory') return;
   const c = $('cpu-canvas');
   try {
-    renderCPUFlow(c, state.coords, state.alphaDeg, { cmap: state.cmap, lo: state.lo, hi: state.hi });
+    state.cpuEv = renderCPUFlow(c, state.coords, state.alphaDeg, { cmap: state.cmap, lo: state.lo, hi: state.hi });
   } catch (e) { console.error(e); }
 }, 180);
 

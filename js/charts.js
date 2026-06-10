@@ -1,12 +1,31 @@
-// Minimal dependency-free canvas charts: line/scatter series, axes, legend.
+// Minimal dependency-free canvas charts: line/scatter series, axes, legend,
+// and a hover crosshair with nearest-point value tooltips.
 
 const COLORS = ['#4cc2ff', '#ffb454', '#7ee787', '#ff7b72', '#d2a8ff', '#ffd866', '#9aa3b2'];
 
 /**
  * plot(canvas, { series, xlabel, ylabel, invertY, xrange, yrange, legend, title })
  * series: [{ x: [], y: [], label, color, type: 'line'|'scatter', dash, width }]
+ * Mouse hover shows a crosshair and the nearest data point; handlers bind once
+ * per canvas and reuse the latest opts.
  */
 export function plot(canvas, opts) {
+  canvas._plotOpts = opts;
+  drawChart(canvas, opts, canvas._hover);
+  if (!canvas._hoverBound) {
+    canvas._hoverBound = true;
+    canvas.addEventListener('mousemove', (e) => {
+      canvas._hover = { mx: e.offsetX, my: e.offsetY };
+      drawChart(canvas, canvas._plotOpts, canvas._hover);
+    });
+    canvas.addEventListener('mouseleave', () => {
+      canvas._hover = null;
+      drawChart(canvas, canvas._plotOpts, null);
+    });
+  }
+}
+
+function drawChart(canvas, opts, hover) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 420, cssH = canvas.clientHeight || 260;
@@ -116,6 +135,75 @@ export function plot(canvas, opts) {
       ly += 14;
     }
   }
+
+  if (hover) {
+    drawHover(ctx, hover, series, { W, H, padL, padR, padT, padB, X, Y, xmin, xmax, ymin, ymax }, opts);
+  }
+}
+
+function drawHover(ctx, hover, series, fr, opts) {
+  const { mx, my } = hover;
+  if (mx < fr.padL || mx > fr.W - fr.padR || my < fr.padT || my > fr.H - fr.padB) return;
+
+  // crosshair
+  ctx.strokeStyle = 'rgba(201,209,217,0.28)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(mx, fr.padT); ctx.lineTo(mx, fr.H - fr.padB); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(fr.padL, my); ctx.lineTo(fr.W - fr.padR, my); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // nearest data point in screen space
+  let best = null;
+  series.forEach((s, si) => {
+    for (let i = 0; i < s.x.length; i++) {
+      if (!Number.isFinite(s.x[i]) || !Number.isFinite(s.y[i])) continue;
+      const dx = fr.X(s.x[i]) - mx, dy = fr.Y(s.y[i]) - my;
+      const d2 = dx * dx + dy * dy;
+      if (!best || d2 < best.d2) best = { d2, s, si, i };
+    }
+  });
+
+  const xl = opts.xlabel || 'x', yl = opts.ylabel || 'y';
+  let lines;
+  if (best && best.d2 <= 18 * 18) {
+    const { s, si, i } = best;
+    ctx.strokeStyle = s.color || COLORS[si % COLORS.length];
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(fr.X(s.x[i]), fr.Y(s.y[i]), 5, 0, 7); ctx.stroke();
+    lines = [s.label || 'series', `${xl}: ${fmtVal(s.x[i])}`, `${yl}: ${fmtVal(s.y[i])}`];
+  } else {
+    const xv = fr.xmin + (mx - fr.padL) / (fr.W - fr.padL - fr.padR) * (fr.xmax - fr.xmin);
+    const t = opts.invertY
+      ? (my - fr.padT) / (fr.H - fr.padT - fr.padB)
+      : (fr.H - fr.padB - my) / (fr.H - fr.padT - fr.padB);
+    const yv = fr.ymin + t * (fr.ymax - fr.ymin);
+    lines = [`${xl}: ${fmtVal(xv)}`, `${yl}: ${fmtVal(yv)}`];
+  }
+
+  // tooltip box, flipped to stay inside the canvas
+  ctx.font = '10px ui-monospace, monospace';
+  const tw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 12;
+  const th = lines.length * 13 + 7;
+  let bx = mx + 12, by = my + 12;
+  if (bx + tw > fr.W - 2) bx = mx - tw - 10;
+  if (by + th > fr.H - 2) by = my - th - 10;
+  ctx.fillStyle = 'rgba(13,17,23,0.92)';
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(bx, by, tw, th, 4);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#c9d1d9';
+  ctx.textAlign = 'left';
+  lines.forEach((l, i) => ctx.fillText(l, bx + 6, by + 14 + i * 13));
+}
+
+function fmtVal(v) {
+  if (!Number.isFinite(v)) return '-';
+  const a = Math.abs(v);
+  if (a >= 1e5 || (a > 0 && a < 1e-3)) return v.toExponential(2);
+  return +v.toPrecision(4) + '';
 }
 
 function ticks(lo, hi, n) {

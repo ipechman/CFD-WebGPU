@@ -7,6 +7,9 @@ import { cmapJS } from './viz.js';
 const GW = 220, GH = 110;               // coarse evaluation grid
 const X0 = -1.3, X1 = 4.2, Y0 = -1.375, Y1 = 1.375;
 
+/** World-space extents of the theory-mode view (for the hover probe). */
+export const CPU_VIEW = { X0, X1, Y0, Y1 };
+
 export function renderCPUFlow(canvas, coords, alphaDeg, { cmap = 0, lo = 0, hi = 1.8 } = {}) {
   const ev = makeFieldEvaluator(coords, alphaDeg, 40);
   const ctx = canvas.getContext('2d');
@@ -58,7 +61,7 @@ export function renderCPUFlow(canvas, coords, alphaDeg, { cmap = 0, lo = 0, hi =
     }
     ctx.stroke();
   }
-  return ev.result;
+  return { velocity: ev.velocity, inside, result: ev.result };
 }
 
 function makeInsideTest(coords) {

@@ -10,6 +10,11 @@ Add new entries at the top of the changelog; pull backlog items from the list be
   chord-travel cap) instead of fixed step counts. 2000 steps was under one chord
   of travel on the default LBM grid; steady cases need 10-30 chords. Sweep points
   pin the mean of the last 20 settled force samples (robust for shedding cases).
+- Add: **hover probe** on the flow field — x/c, y/c, |V|/U∞, Cp, plus local Mach
+  & density (Euler) or vorticity (LBM); works in Theory mode via the panel
+  evaluator. Macro readbacks are throttled (250 ms) and serialized with Cp
+  sampling (shared staging buffer can't be mapped twice).
+- Add: hover crosshair + nearest-point tooltips on all four plots.
 
 ### v0.1.2 — 2026-06-10
 - Fix: macro texture is now seeded by the init kernels — first rendered frame
