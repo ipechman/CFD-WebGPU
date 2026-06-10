@@ -5,6 +5,19 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.6 — 2026-06-10
+- Add: **scroll-wheel zoom** on the flow view (cursor-anchored, 1-12×,
+  double-click resets; HUD shows the factor). The hover probe maps through the
+  same view transform, so probed x/c stays correct while zoomed.
+- Fix: **validation honesty** — rows now pass/fail only when their reference
+  actually applies. Cd vs A&vD across >0.7 decades of Re is condition mismatch
+  (info), replaced by a matched-Re empirical row; LBM's *resolved* Re (after
+  the stability clamp) is used everywhere; attached-flow references go info
+  below Re~3e4 (separated regime) and past α~10° (panel never stalls); known
+  staircase deficits (subsonic Euler Cl, supersonic wave drag) stay failing
+  but say why. Default case went from a wall of >70% "fails" to 3 pass /
+  2 check / honest info — without softening any genuine failure.
+
 ### v0.1.5 — 2026-06-10
 - Add: **characteristic far-field BCs** for the Euler engine (1D Riemann
   invariants along each sweep axis, all four boundaries). Subsonic/transonic

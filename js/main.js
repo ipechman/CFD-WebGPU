@@ -865,6 +865,7 @@ function refreshValidation() {
         airfoilId: state.airfoilId, coords: state.coords, M: state.M, Re: state.Re,
         alphaDeg: state.alphaDeg, engine: kind,
         effRe: (kind === 'lbm' && state.engine) ? state.engine.effectiveRe : null,
+        chordCells: state.engine ? state.engine.chord : null,
       },
       { solver, panel: state.panelRes, theory: state.theoryRes });
   } catch (e) { console.error(e); }

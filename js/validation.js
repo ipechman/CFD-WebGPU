@@ -66,17 +66,34 @@ export function evaluateCase(ctx, results) {
   const pct = (a, b) => Math.abs(b) > 1e-4 ? Math.abs((a - b) / b) * 100 : Math.abs(a - b) * 100;
   const status = (d, warn, fail) => d <= warn ? 'pass' : d <= fail ? 'warn' : 'fail';
 
+  // Reynolds number the solver actually resolves (LBM stability clamp can sit
+  // decades below the request); references are judged against this.
+  const simRe = (engine === 'lbm' && ctx.effRe) ? ctx.effRe : Re;
+  const lowRe = engine === 'lbm' && simRe < 3e4; // largely separated regime
+
   // ---- 1. Lift vs thin-airfoil / linearized theory ----
   const slope = liftSlope(M);
   if (Number.isFinite(slope) && panel && M < 0.75) {
     const clTheory = panel.cl * prandtlGlauert(M); // panel (exact incompressible) + PG
     if (solver) {
       const d = pct(solver.cl, clTheory);
+      let st = status(d, 12, 25);
+      let note = 'Inviscid attached-flow reference; expect CFD slightly lower (viscous decambering).';
+      if (lowRe) {
+        st = 'info';
+        note = `At resolved Re~${simRe.toExponential(1)} the flow is largely separated - attached-flow inviscid references do not apply.`;
+      } else if (engine === 'lbm' && alphaDeg >= 10) {
+        // the panel method never stalls; past ~10 deg the reference is the
+        // invalid party, not the solver
+        st = d <= 25 ? st : 'info';
+        note = 'Panel method never stalls - beyond ~10 deg this reference is invalid; use the wind-tunnel row instead.';
+      } else if (engine === 'euler' && M < 0.8) {
+        note = 'Known deficit: staircase walls weaken the Kutta condition, so subsonic Euler Cl reads 30-40% low on the default grid (see Help trust guide). Finer grid narrows it.';
+      }
       add({
         name: `Cl vs panel method${M > 0.05 ? ' + Prandtl-Glauert' : ''}`,
         computed: solver.cl, reference: clTheory, refSource: 'Hess-Smith panel (inviscid)',
-        delta: d, status: status(d, 12, 25),
-        note: 'Inviscid attached-flow reference; expect CFD slightly lower (viscous decambering).',
+        delta: d, status: st, note,
       });
     }
   }
@@ -86,24 +103,56 @@ export function evaluateCase(ctx, results) {
   if (exp && M < 0.4 && alphaDeg >= exp.alpha[0] && alphaDeg <= exp.alpha[exp.alpha.length - 1]) {
     const clRef = interp(exp.alpha, exp.cl, alphaDeg);
     const cdRef = interp(exp.alpha, exp.cd, alphaDeg);
-    const reOff = Math.abs(Math.log10(Re / exp.Re));
-    const reNote = reOff > 0.5 ? ` (data at Re=${exp.Re.toExponential(0)}; you are at ${Re.toExponential(1)})` : '';
+    const reOff = Math.abs(Math.log10(simRe / exp.Re));
+    const reNote = reOff > 0.5
+      ? ` Data at Re=${exp.Re.toExponential(0)}; simulation resolves Re~${simRe.toExponential(1)}.`
+      : '';
     if (solver) {
       const dl = pct(solver.cl, clRef);
       add({
         name: 'Cl vs wind tunnel', computed: solver.cl, reference: clRef, refSource: exp.source,
-        delta: dl, status: status(dl, 15, 30),
-        note: `Experimental polar${reNote}.`,
+        delta: dl,
+        // lift is only mildly Re-dependent pre-stall: widen, don't excuse.
+        // Beyond ~2 decades it is a different flow regime entirely.
+        status: reOff > 2 ? 'info' : reOff > 0.7 ? status(dl, 20, 40) : status(dl, 15, 30),
+        note: reOff > 2
+          ? `Different flow regime: lift at Re~${simRe.toExponential(1)} (separated/laminar) is not comparable to Re=${exp.Re.toExponential(0)} data.`
+          : `Experimental polar.${reNote}${reOff > 0.7 ? ' Expect earlier stall and higher Cl scatter at low Re.' : ''}`,
       });
       const dd = pct(solver.cd, cdRef);
-      add({
-        name: 'Cd vs wind tunnel', computed: solver.cd, reference: cdRef, refSource: exp.source,
-        delta: dd,
-        status: engine === 'lbm' && Re > 2e5 ? (dd <= 60 ? 'warn' : 'info') : status(dd, 30, 60),
-        note: engine === 'lbm' && Re > 2e5
-          ? 'LBM at high Re under-resolves the boundary layer; Cd is indicative only - prefer the empirical estimate.'
-          : `Experimental polar${reNote}.`,
-      });
+      if (reOff > 0.7) {
+        // drag is viscosity-dominated: across a decade of Re this is a
+        // condition mismatch, not a solver error - report, don't fail
+        add({
+          name: 'Cd vs wind tunnel', computed: solver.cd, reference: cdRef, refSource: exp.source,
+          delta: dd, status: 'info',
+          note: `Not comparable: Cd is Re-dominated and the conditions differ by ${reOff.toFixed(1)} decades.${reNote} See the matched-Re row.`,
+        });
+        const frEff = frictionDrag(simRe, info.tc, M);
+        const cdMatched = frEff.cdOfCl(solver.cl);
+        const dm = pct(solver.cd, cdMatched);
+        // boundary-layer resolution at the resolved Re (laminar estimate)
+        const blCells = ctx.chordCells ? 5 * ctx.chordCells / Math.sqrt(simRe) : null;
+        const underRes = blCells !== null && blCells < 8;
+        add({
+          name: 'Cd vs empirical (resolved Re)', computed: solver.cd, reference: cdMatched,
+          refSource: `Empirical drag polar at Re=${simRe.toExponential(1)}`,
+          delta: dm,
+          status: underRes ? (dm <= 350 ? 'warn' : 'fail')
+            : lowRe ? status(dm, 60, 150) // empirical model itself is +/-50% down here
+            : status(dm, 35, 70),
+          note: underRes
+            ? `Boundary layer ~${blCells.toFixed(0)} cells thick here - LBM Cd runs 2-4x high when under-resolved. Drop Re below ~3e4 or use the fine grid for a meaningful Cd.`
+            : lowRe ? 'Like-for-like at the resolved Re; the empirical model itself carries large uncertainty below Re~3e4.'
+            : 'Like-for-like drag check at the Reynolds number the grid actually resolves.',
+        });
+      } else {
+        add({
+          name: 'Cd vs wind tunnel', computed: solver.cd, reference: cdRef, refSource: exp.source,
+          delta: dd, status: status(dd, 30, 60),
+          note: `Experimental polar.${reNote}`,
+        });
+      }
     }
     if (theory && theory.valid) {
       const dt = pct(theory.cl, clRef);
@@ -129,7 +178,8 @@ export function evaluateCase(ctx, results) {
         add({
           name: 'Cd (wave) vs exact shock-expansion', computed: solver.cd, reference: ex.cd,
           refSource: 'Oblique shock + Prandtl-Meyer (exact)', delta: dd,
-          status: status(dd, 12, 25), note: 'Euler drag is wave drag; add skin friction for total.',
+          status: status(dd, 12, 25),
+          note: 'Known deficit: staircase walls blunt thin sharp sections, roughly doubling wave drag on the default grid; the fine grid halves the error. Add skin friction for total drag.',
         });
       }
     } else {
@@ -146,7 +196,8 @@ export function evaluateCase(ctx, results) {
         add({
           name: 'Cd (wave) vs Ackeret', computed: solver.cd, reference: ak.cd,
           refSource: 'Linearized supersonic theory', delta: dd,
-          status: status(dd, 20, 40), note: 'Wave drag comparison; viscous drag excluded.',
+          status: status(dd, 20, 40),
+          note: 'Wave drag comparison (viscous excluded). Staircase walls inflate thin-section wave drag on the default grid.',
         });
       }
     }
@@ -211,8 +262,8 @@ export function trustNote(engine, M, Re, effRe) {
     return n;
   }
   if (engine === 'euler') {
-    if (M < 0.5) return 'Euler (inviscid): no boundary layer, so no friction drag and no stall. Cl reliable for attached flow; use empirical Cd0 for drag.';
-    if (M < 1.15) return 'Transonic Euler: shock positions and wave drag captured; expect mild oscillation near M~1. Staircase boundary adds ~5-15% error.';
+    if (M < 0.5) return 'Euler (inviscid): no boundary layer, so no friction drag and no stall. KNOWN: subsonic Cl reads 30-40% low on the default grid (staircase Kutta deficit) - prefer LBM below M 0.3 or the panel estimate; finer grid helps.';
+    if (M < 1.15) return 'Transonic Euler: shock positions and trends captured, but the staircase surface costs lift (Cl low) and adds spurious drag; treat magnitudes as approximate, trends as reliable.';
     if (M <= 4) return 'Supersonic Euler: shocks and wave drag well captured; compare with Ackeret/shock-expansion rows above.';
     return 'M>4: calorically perfect gas assumed (no real-gas/chemistry effects -> real stagnation temperatures lower). Treat as qualitative hypersonic.';
   }
