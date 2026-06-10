@@ -5,6 +5,16 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.8 — 2026-06-10
+- Add: **Bouzidi interpolated bounce-back** for the LBM engine (backlog #1).
+  Per-link wall fractions q are computed from the true outline at geometry
+  setup (8 bytes/cell, new storage buffer) and the streaming step interpolates
+  the bounced population to the actual wall position; momentum exchange uses
+  the interpolated outgoing population and the q-weighted wall point.
+  Measured (NACA 2412, M0.1, Re 2e5 → resolved ~9e4, default grid):
+  Cl(α4) 0.765 → **0.703** vs 0.65 A&vD (17.7% → 8.2% high);
+  Cl(α8) **1.125** vs 1.06 (6%). α14 shedding stable; TGV test unchanged.
+
 ### v0.1.7 — 2026-06-10
 - Add: **ghost-fluid boundary with true surface normals** for the Euler engine
   (backlog #1). The rasterizer encodes the nearest-outline normal into each
@@ -97,8 +107,8 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Backlog (small, prioritized)
 
-1. **LBM curved boundary** (interpolated bounce-back, Bouzidi) — Euler got ghost-fluid normals in v0.1.7; LBM still uses staircase bounce-back (Cl ~15-20% high vs A&vD at default grid).
-2. **Residual Euler numerical drag** (~0.01-0.02 at subsonic/transonic) — entropy generation at the staircase quadrature; cut cells or higher-order wall pressure would shrink it.
+1. **Residual Euler numerical drag** (~0.01-0.02 at subsonic/transonic) — entropy generation at the staircase quadrature; cut cells or higher-order wall pressure would shrink it.
+2. **Residual LBM Cl bias** (~6-8% high pre-stall at default grid) — likely wall-function / resolution; finer grid or multi-relaxation-time collision would help.
 3. **URL state sharing** — encode airfoil/M/Re/α in the hash for shareable cases.
 4. **Local time stepping** for steady Euler cases (3–5× faster convergence).
 5. **LBM wall function** or grid refinement near the surface for better high-Re Cd.

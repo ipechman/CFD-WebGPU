@@ -26,6 +26,9 @@ struct Params {
 @group(0) @binding(3) var<storage, read> solid: array<u32>;
 @group(0) @binding(4) var<storage, read_write> forceAcc: array<atomic<i32>>; // Fx, Fy, Tz
 @group(0) @binding(5) var macroTex: texture_storage_2d<rgba16float, write>;
+// Bouzidi link fractions: per fluid cell, 8 bytes (k=1..8) packed in 2 u32;
+// byte b!=0 encodes q=(b-1)/254 = fraction of the link to the true outline
+@group(0) @binding(6) var<storage, read> wallq: array<u32>;
 
 var<private> E: array<vec2i, 9> = array<vec2i, 9>(
   vec2i(0, 0), vec2i(1, 0), vec2i(0, 1), vec2i(-1, 0), vec2i(0, -1),
@@ -89,17 +92,38 @@ fn step_lbm(@builtin(global_invocation_id) gid: vec3u) {
     } else {
       let sidx = u32(sy) * P.nx + u32(sx);
       if (solid[sidx] != 0u) {
-        let fbb = fin[OPP[k] * N + idx];        // bounce-back
-        f[k] = fbb;
-        // momentum to body from this link: -2 * e_k * f_opp_post
+        // Bouzidi interpolated bounce-back: the wall for population k lies
+        // along OPP[k]; q is the link fraction to the true outline there
+        let fbb = fin[OPP[k] * N + idx];        // post-collision f_opp at this node
+        let d = OPP[k];
+        let w = wallq[2u * idx + ((d - 1u) >> 2u)];
+        let b = (w >> (8u * ((d - 1u) & 3u))) & 0xffu;
+        var q = 0.5;
+        if (b != 0u) { q = f32(b - 1u) / 254.0; }
+        var fk = fbb;                            // q = 0.5 reduces to halfway BB
+        if (q < 0.5) {
+          // needs f_opp one node further from the wall (along +e_k)
+          let n2x = i32(x) + ek.x;
+          let n2y = i32(y) + ek.y;
+          var f2 = fbb;
+          if (n2x >= 0 && n2x < i32(P.nx) && n2y >= 0 && n2y < i32(P.ny)) {
+            let nidx = u32(n2y) * P.nx + u32(n2x);
+            if (solid[nidx] == 0u) { f2 = fin[OPP[k] * N + nidx]; }
+          }
+          fk = 2.0 * q * fbb + (1.0 - 2.0 * q) * f2;
+        } else if (q > 0.5) {
+          fk = fbb / (2.0 * q) + (1.0 - 1.0 / (2.0 * q)) * fin[k * N + idx];
+        }
+        f[k] = fk;
+        // momentum to body from this link: -e_k * (incoming + outgoing)
         let e = vec2f(ek);
-        let px = -2.0 * e.x * fbb;
-        let py = -2.0 * e.y * fbb;
+        let px = -e.x * (fbb + fk);
+        let py = -e.y * (fbb + fk);
         dFx += px;
         dFy += py;
-        // wall point ~ halfway to solid neighbor
-        let rx = f32(x) + 0.5 - 0.5 * e.x - P.cmx;
-        let ry = f32(y) + 0.5 - 0.5 * e.y - P.cmy;
+        // wall point ~ q of the way to the solid neighbor
+        let rx = f32(x) + 0.5 - q * e.x - P.cmx;
+        let ry = f32(y) + 0.5 - q * e.y - P.cmy;
         dTz += rx * py - ry * px;
       } else {
         f[k] = fin[k * N + sidx];
