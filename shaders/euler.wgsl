@@ -20,7 +20,7 @@ struct Params {
   fscale: f32,
   cmx: f32,
   cmy: f32,
-  pad0: f32,
+  vmax: f32,  // velocity bound; sized for the hottest recent Mach (see euler.js)
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -32,12 +32,26 @@ struct Params {
 
 const RHO_MIN: f32 = 1e-6;
 const P_MIN: f32 = 1e-7;
+const BIG: f32 = 1e12;
 
 fn prim(U: vec4f) -> vec4f {
   let rho = max(U.x, RHO_MIN);
-  let u = U.y / rho;
-  let v = U.z / rho;
+  var u = U.y / rho;
+  var v = U.z / rho;
+  // pressure from the UNclamped velocity, so the clamp below discards excess
+  // kinetic energy instead of converting it to pressure (a p-feedback there
+  // detonates the field: p up -> a up -> CFL violated -> more clamping)
   let p = max((P.gamma - 1.0) * (U.w - 0.5 * rho * (u * u + v * v)), P_MIN);
+  // total-enthalpy speed limit (1.25x margin): a vacuum-floor cell dividing
+  // finite momentum by RHO_MIN would otherwise drive dt*|u| far past CFL.
+  // P.vmax tracks the hottest recent Mach (euler.js), not the instantaneous
+  // one - a live Mach drop must not clamp the still-fast old field.
+  let V2 = u * u + v * v;
+  if (V2 > P.vmax * P.vmax) {
+    let sc = P.vmax / sqrt(V2);
+    u *= sc;
+    v *= sc;
+  }
   return vec4f(rho, u, v, p);
 }
 
@@ -174,6 +188,10 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   let FR = hllc(Rfl, Rfr, P.axis);
 
   var U1 = Uin[idx] - P.dtdx * (FR - FL);
+  // scrub non-finite cells (extreme transients, e.g. live Mach scrubbing):
+  // one poisoned cell otherwise NaN-floods the whole domain
+  let ok = abs(U1.x) < BIG && abs(U1.y) < BIG && abs(U1.z) < BIG && abs(U1.w) < BIG;
+  if (!ok) { U1 = cons(freestream()); }
   U1 = cons(prim(U1)); // positivity clamp
   Uout[idx] = U1;
 

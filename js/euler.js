@@ -77,7 +77,12 @@ export class EulerEngine {
   }
 
   setFlow(M, Re, alphaDeg) {
-    this.flow = { M: Math.max(0.05, M), Re, alphaDeg };
+    const newM = Math.max(0.05, M);
+    // live Mach changes leave a "hot" field at the old speeds; size dt for the
+    // larger of old/new M until the transient washes out (decayed in step()),
+    // otherwise lowering M on a hot field violates CFL and NaN-floods the grid
+    this.mHot = Math.max(this.mHot || 0, this.flow ? this.flow.M : 0, newM);
+    this.flow = { M: newM, Re, alphaDeg };
     // adaptive fixed-point scale: high-M stagnation pressures need headroom in i32 atomics
     const fs = this.flow.M >= 3 ? 250 : 1000;
     if (fs !== this.fscale) {
@@ -91,20 +96,23 @@ export class EulerEngine {
   }
 
   get dtdx() {
-    const M = this.flow.M;
+    const M = Math.max(this.flow.M, this.mHot || 0);
     const denom = 1.15 * Math.max(M + 1, Math.min(2.2 * M + 1.1, M + 2));
     return 0.65 / denom;
   }
 
   writeUniforms() {
     const a = this.flow.alphaDeg * Math.PI / 180;
+    // velocity bound from total enthalpy at the hottest recent Mach (+25%)
+    const mEff = Math.max(this.flow.M, this.mHot || 0);
+    const vmax = 1.25 * Math.sqrt(mEff * mEff + 2 / 0.4);
     for (let i = 0; i < 4; i++) {
       const [axis, wm] = this.uniCombos[i];
       const buf = new ArrayBuffer(48);
       new Uint32Array(buf, 0, 4).set([this.nx, this.ny, axis, wm]);
       new Float32Array(buf, 16, 8).set([
         this.dtdx, 1.4, this.flow.M, a,
-        this.fscale, this.origin[0] + 0.25 * this.chord, this.origin[1], 0,
+        this.fscale, this.origin[0] + 0.25 * this.chord, this.origin[1], vmax,
       ]);
       this.device.queue.writeBuffer(this.unis[i], 0, buf);
     }
@@ -118,6 +126,7 @@ export class EulerEngine {
 
   reset() {
     this.iter = 0;
+    this.mHot = this.flow.M; // fresh field carries no hot transient
     this.writeUniforms();
     const enc = this.device.createCommandEncoder();
     enc.clearBuffer(this.forceBuf);
@@ -134,6 +143,13 @@ export class EulerEngine {
   }
 
   step(n) {
+    if ((this.mHot || 0) > this.flow.M + 1e-6) {
+      // relax the hot-field guard as the old flow flushes out: ~20% per chord
+      // of travel (the domain takes ~7 chord-times to refill at the new speed)
+      const chords = n / this.stepsPerChord;
+      this.mHot = Math.max(this.flow.M, this.mHot * Math.pow(0.8, chords));
+      this.writeUniforms();
+    }
     const enc = this.device.createCommandEncoder();
     const wg = [Math.ceil(this.nx / 16), Math.ceil(this.ny / 16)];
     for (let i = 0; i < n; i++) {

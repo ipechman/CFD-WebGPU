@@ -4,10 +4,15 @@
 const G = 1.4;
 
 // ---- mirrors of the WGSL functions (keep in sync with shaders/euler.wgsl) ----
-function prim(U) {
+function prim(U, minf = 0) {
   const rho = Math.max(U[0], 1e-6);
-  const u = U[1] / rho, v = U[2] / rho;
+  let u = U[1] / rho, v = U[2] / rho;
+  // p from the unclamped velocity: the clamp discards excess KE (no p pump)
   const p = Math.max((G - 1) * (U[3] - 0.5 * rho * (u * u + v * v)), 1e-7);
+  // total-enthalpy speed limit (1.25x margin) - kills vacuum-cell blow-up
+  const vmax = 1.25 * Math.sqrt(minf * minf + 2 / (G - 1));
+  const V2 = u * u + v * v;
+  if (V2 > vmax * vmax) { const sc = vmax / Math.sqrt(V2); u *= sc; v *= sc; }
   return [rho, u, v, p];
 }
 function cons(W) {
@@ -79,6 +84,39 @@ function runSod(N) {
     t += dt;
   }
   return U.map(prim);
+}
+
+// ---- GPU-like fixed-dt march into deep rarefaction / near-vacuum ----
+// Mirrors the sweep kernel's conditions (fixed dtdx, like live Mach scrubbing
+// or the leeward side of a sharp body at high M). Without the velocity bound
+// in prim(), the vacuum-floor cells divide momentum by RHO_MIN and go NaN.
+function runVacuum(N) {
+  const minf = 6;
+  const dtdx = 0.65 / (1.15 * Math.max(minf + 1, Math.min(2.2 * minf + 1.1, minf + 2)));
+  const W = (U) => prim(U, minf);
+  let U = [];
+  for (let i = 0; i < N; i++) {
+    U.push(cons([1, i < N / 2 ? -6 : 5.5, 0, 1 / G])); // receding at supersonic speed
+  }
+  const getW = (arr, i) => W(arr[Math.max(0, Math.min(N - 1, i))]);
+  for (let it = 0; it < 600; it++) {
+    const Un = [];
+    for (let i = 0; i < N; i++) {
+      const Wm2 = getW(U, i - 2), Wm1 = getW(U, i - 1), W0 = getW(U, i), Wp1 = getW(U, i + 1), Wp2 = getW(U, i + 2);
+      const sub = (A, B) => A.map((a, k) => a - B[k]);
+      const sm1 = minmod(sub(Wm1, Wm2), sub(W0, Wm1));
+      const s0 = minmod(sub(W0, Wm1), sub(Wp1, W0));
+      const sp1 = minmod(sub(Wp1, W0), sub(Wp2, Wp1));
+      const ax = (A, S, f) => A.map((a, k) => a + f * S[k]);
+      const FL = hllc(ax(Wm1, sm1, 0.5), ax(W0, s0, -0.5));
+      const FR = hllc(ax(W0, s0, 0.5), ax(Wp1, sp1, -0.5));
+      let u1 = U[i].map((u, k) => u - dtdx * (FR[k] - FL[k]));
+      if (!u1.every(Number.isFinite)) u1 = cons([1, minf, 0, 1 / G]); // scrub mirror
+      Un.push(cons(W(u1)));
+    }
+    U = Un;
+  }
+  return U.map(W);
 }
 
 // ---- exact Riemann solver (Toro) ----
@@ -154,5 +192,22 @@ export function test() {
   const star = exactRiemann([1, 0, 0, 1], [0.125, 0, 0, 0.1], 0.01, 0.2);
   checks.push(['exact p* ~ 0.30313', Math.abs(star[3] - 0.30313) < 0.0005, star[3].toFixed(5)]);
   checks.push(['exact u* ~ 0.92745', Math.abs(star[1] - 0.92745) < 0.0005, star[1].toFixed(5)]);
+
+  // velocity bound: a vacuum-floor cell (rho at clamp) with finite momentum
+  // must not explode to |u| ~ 1e5 (the NaN seed in the 2D solver)
+  const Wv = prim([1e-9, 0.5, 0, 1.0], 2);
+  const vb = 1.25 * Math.sqrt(4 + 2 / (G - 1));
+  checks.push(['prim: vacuum-cell |u| bounded (M2)', Math.hypot(Wv[1], Wv[2]) <= vb + 1e-9,
+    Math.hypot(Wv[1], Wv[2]).toFixed(2) + ' <= ' + vb.toFixed(2)]);
+
+  // vacuum robustness: fixed-dt deep rarefaction must stay finite & bounded
+  const vac = runVacuum(200);
+  const finite = vac.every(w => w.every(Number.isFinite));
+  let rhoMin = Infinity, uMax = 0;
+  for (const w of vac) { rhoMin = Math.min(rhoMin, w[0]); uMax = Math.max(uMax, Math.hypot(w[1], w[2])); }
+  const vmax6 = 1.25 * Math.sqrt(36 + 5);
+  checks.push(['vacuum march: all states finite', finite, finite ? 'ok' : 'NaN/Inf']);
+  checks.push(['vacuum march: rho stays positive', rhoMin > 0, rhoMin.toExponential(1)]);
+  checks.push([`vacuum march: |u| <= vmax (${vmax6.toFixed(1)})`, uMax <= vmax6 + 1e-6, uMax.toFixed(2)]);
   return checks;
 }

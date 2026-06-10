@@ -5,6 +5,17 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.4 — 2026-06-10
+- Fix: **NaN flood** (diamond, M6, high α, live Mach changes). Three layers:
+  (1) `prim()` bounds velocity at the total-enthalpy limit — a vacuum-floor cell
+  dividing finite momentum by RHO_MIN was the NaN seed; the bound discards
+  excess KE rather than converting it to pressure (a p-feedback detonates the
+  field). (2) Non-finite cells are scrubbed to freestream (one poisoned cell
+  otherwise floods the domain). (3) Live Mach changes keep dt and the velocity
+  bound sized for the hottest recent Mach until the old flow flushes out
+  (~20%/chord decay) — dropping M live used to violate CFL instantly.
+  Regression: vacuum-cell prim unit check + fixed-dt deep-rarefaction march.
+
 ### v0.1.3 — 2026-06-10
 - Fix: fast-forward and α-sweep now run **to force convergence** (batched, with a
   chord-travel cap) instead of fixed step counts. 2000 steps was under one chord
