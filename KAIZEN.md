@@ -5,6 +5,12 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.3 — 2026-06-10
+- Fix: fast-forward and α-sweep now run **to force convergence** (batched, with a
+  chord-travel cap) instead of fixed step counts. 2000 steps was under one chord
+  of travel on the default LBM grid; steady cases need 10-30 chords. Sweep points
+  pin the mean of the last 20 settled force samples (robust for shedding cases).
+
 ### v0.1.2 — 2026-06-10
 - Fix: macro texture is now seeded by the init kernels — first rendered frame
   after reset was undefined GPU memory until the first step completed.
@@ -35,10 +41,20 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 1. **Characteristic far-field BC** for subsonic Euler outlet (reduces reflections, faster convergence).
 2. **Cut-cell boundary** (or ghost-fluid with true normals) to replace staircase walls — biggest single accuracy win.
-3. **Cp sample auto-refresh** on convergence (currently manual button).
-4. **URL state sharing** — encode airfoil/M/Re/α in the hash for shareable cases.
-5. **Local time stepping** for steady Euler cases (3–5× faster convergence).
-6. **LBM wall function** or grid refinement near the surface for better high-Re Cd.
-7. **Drag decomposition display** (pressure vs friction vs wave) in Results tab.
-8. **PNG export** of canvas + charts.
-9. **Streamline (LIC) field mode** as alternative to particles.
+3. **URL state sharing** — encode airfoil/M/Re/α in the hash for shareable cases.
+4. **Local time stepping** for steady Euler cases (3–5× faster convergence).
+5. **LBM wall function** or grid refinement near the surface for better high-Re Cd.
+6. **Drag decomposition display** (pressure vs friction vs wave) in Results tab.
+7. **PNG export** of canvas + charts.
+8. **Streamline (LIC) field mode** as alternative to particles.
+9. **More airfoils**: NACA 6-series (63/64/65), supercritical SC(2)-0714, MH-series.
+10. **Interactive geometry editor** (drag control points, live reshaping).
+11. **WENO option** for the Euler engine at high Mach (crisper shocks at cost of speed).
+12. **Mobile layout** pass (collapsible sidebar, touch sliders).
+13. **Web Worker** for panel polar sweeps (avoid main-thread hitches on slow machines).
+
+## Process
+
+- Always run `node tests/run_all.mjs` before committing.
+- Each improvement = one commit, message prefixed `kaizen:`.
+- New physics → new validation row or test first.

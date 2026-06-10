@@ -248,7 +248,7 @@ function bindUI() {
 
   $('btn-run').addEventListener('click', () => setRunning(!state.running));
   $('btn-reset').addEventListener('click', () => { if (state.engine) { state.engine.reset(); } resetRun(); });
-  $('btn-ff').addEventListener('click', () => fastForward(2000).catch(console.error));
+  $('btn-ff').addEventListener('click', () => runToConvergence().catch(console.error));
 
   $('field-select').addEventListener('change', (e) => setField(+e.target.value));
   $('cmap-select').addEventListener('change', (e) => { state.cmap = +e.target.value; drawBar(); });
@@ -610,28 +610,55 @@ async function sampleCp(manual = true) {
 
 // ============================================================ fast-forward & sweep
 
-async function fastForward(n, internal = false) {
+/**
+ * Run the solver in batches until the force-convergence criterion fires,
+ * capped at maxChords of freestream travel. A fixed step count is useless
+ * here: 2000 steps is under one chord on the default LBM grid, while steady
+ * cases need 10-30 chords.
+ */
+async function runToConvergence(maxChords = 40, internal = false, label = 'Converging') {
   const eng = state.engine;
-  if (!eng || (!internal && state.busy)) return;
-  if (!internal) { state.busy = true; }
+  if (!eng || (!internal && state.busy)) return false;
+  if (!internal) state.busy = true;
   const bar = $('ff-progress');
   bar.classList.remove('hidden');
+  // a fresh verdict needs >= 20 settled samples (5 chords at quarter-chord batches)
+  const minChords = state.converged ? 2 : 5;
+  const batch = Math.max(40, Math.round(eng.stepsPerChord / 4));
+  const total = Math.round(maxChords * eng.stepsPerChord);
+  const t0 = eng.tStar;
+  let hit = false;
   try {
-    const batch = 100;
-    for (let done = 0; done < n; done += batch) {
-      if (state.sweepCancel && internal) break;
+    for (let done = 0; done < total; done += batch) {
+      if (internal && state.sweepCancel) break;
       eng.step(batch);
       await state.device.queue.onSubmittedWorkDone();
-      bar.firstElementChild.style.width = `${((done + batch) / n * 100).toFixed(0)}%`;
+      await sampleForces();
+      if (state.converged && eng.tStar - t0 >= minChords) { hit = true; break; }
+      bar.firstElementChild.style.width = `${Math.min(100, (done + batch) / total * 100).toFixed(0)}%`;
+      const f = state.lastForces;
+      setStatus(`${label}: t* ${eng.tStar.toFixed(1)} of ${(t0 + maxChords).toFixed(0)} chords` +
+        (f && Number.isFinite(f.cl) ? `, Cl ${f.cl.toFixed(3)}` : '') + '...');
     }
   } finally {
     bar.classList.add('hidden');
     bar.firstElementChild.style.width = '0%';
     if (!internal) {
       state.busy = false;
-      await sampleForces();
+      setStatus(hit
+        ? `Converged (${state.convergedKind}) after ${(eng.tStar - t0).toFixed(1)} chords of travel.`
+        : `Hit the ${maxChords}-chord cap without full convergence - flow is likely unsteady; readouts show the running average.`);
     }
   }
+  return hit;
+}
+
+/** Mean of the recent settled force samples (robust for shedding/unsteady cases). */
+function meanRecentForces(n = 20) {
+  const h = state.history.filter(s => s.settled).slice(-n);
+  if (!h.length) return null;
+  const avg = (k) => h.reduce((acc, s) => acc + s[k], 0) / h.length;
+  return { cl: avg('cl'), cd: avg('cd'), cm: avg('cm') };
 }
 
 async function alphaSweep() {
@@ -642,23 +669,23 @@ async function alphaSweep() {
   $('btn-sweep').textContent = 'cancel sweep';
   const saved = state.alphaDeg;
   const alphas = eng.type === 'lbm' ? [-4, -2, 0, 2, 4, 6, 8, 10, 12] : [-2, 0, 2, 4, 6, 8];
-  const settle = eng.type === 'lbm' ? 2600 : 1800;
   try {
     for (const a of alphas) {
       if (state.sweepCancel) break;
-      setStatus(`Alpha sweep: ${a.toFixed(0)} deg (${alphas.indexOf(a) + 1}/${alphas.length})...`);
+      const label = `Alpha sweep ${alphas.indexOf(a) + 1}/${alphas.length} (${a.toFixed(0)} deg)`;
       state.alphaDeg = a;
       $('alpha-slider').value = a;
       $('alpha-val').textContent = a.toFixed(1) + '°';
       eng.setFlow(state.M, state.Re, a);
       eng.reset();
-      await fastForward(settle, true);
-      await eng.readForces();              // discard transient window
-      await fastForward(400, true);
-      const f = await eng.readForces();
-      if (f) {
+      state.history = [];
+      state.converged = false;
+      const hit = await runToConvergence(30, true, label);
+      const f = meanRecentForces();
+      if (f && !state.sweepCancel) {
         state.pinned.push({ alpha: a, cl: f.cl, cd: f.cd, cm: f.cm, M: state.M, Re: state.Re, engine: eng.type });
         updatePolarChart(); updateDragChart();
+        setStatus(`${label}: ${hit ? `converged (${state.convergedKind})` : 'capped, time-averaged'} - Cl ${f.cl.toFixed(3)}.`);
       }
     }
     setStatus(state.sweepCancel ? 'Sweep cancelled.' : 'Alpha sweep complete - see the Plots tab.');

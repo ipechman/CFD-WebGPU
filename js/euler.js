@@ -180,6 +180,9 @@ export class EulerEngine {
   /** Nondimensional time (chords traveled at U_inf). */
   get tStar() { return this.iter * this.dtdx * this.flow.M / this.chord; }
 
+  /** Solver steps for the flow to travel one chord length. */
+  get stepsPerChord() { return this.chord / (this.dtdx * Math.max(this.flow.M, 0.05)); }
+
   destroy() {
     for (const b of [this.bufA, this.bufB, this.solidBuf, this.forceBuf, this.stagingBuf, ...this.unis]) b.destroy();
     this.macroTex.destroy();
