@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Airfoil CFD Lab - WebGPU</title>
+<meta name="description" content="Interactive 2D airfoil CFD in the browser: Lattice-Boltzmann (viscous), compressible Euler (Mach 0.3-6, shocks), and panel-method engines. Validated against wind-tunnel data and exact theory.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M2 20 Q10 8 24 12 Q30 14 30 16 Q30 18 22 19 Q10 21 2 20 Z' fill='%234cc2ff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 32 32"><path d="M2 20 Q10 8 24 12 Q30 14 30 16 Q30 18 22 19 Q10 21 2 20 Z" fill="#4cc2ff"/></svg>
+    <h1>Airfoil CFD Lab <span class="thin">/ WebGPU</span></h1>
+  </div>
+  <div class="header-right">
+    <span id="regime-label" class="badge">subsonic</span>
+    <span id="engine-badge" class="badge accent">LBM</span>
+    <span id="gpu-status" class="badge">checking GPU...</span>
+  </div>
+</header>
+
+<div id="layout">
+  <!-- ======================= sidebar ======================= -->
+  <aside id="sidebar">
+    <section>
+      <h2>Airfoil</h2>
+      <select id="airfoil-select" title="Airfoil database"></select>
+      <div class="row">
+        <input id="naca-code" type="text" placeholder="NACA code e.g. 2412" spellcheck="false">
+        <button id="naca-apply" class="btn small">Set</button>
+      </div>
+      <details id="custom-details">
+        <summary>Custom geometry (.dat)</summary>
+        <textarea id="custom-dat" rows="5" placeholder="Paste Selig or Lednicer .dat coordinates&#10;name line optional&#10;x y per line, TE-&gt;upper-&gt;LE-&gt;lower-&gt;TE"></textarea>
+        <div class="row">
+          <input type="file" id="custom-file" accept=".dat,.txt,.csv">
+          <button id="custom-apply" class="btn small">Load</button>
+        </div>
+      </details>
+      <canvas id="foil-preview" width="280" height="80"></canvas>
+      <div id="foil-info" class="dim"></div>
+    </section>
+
+    <section>
+      <h2>Flow conditions</h2>
+      <label>Mach <span class="val" id="mach-val">0.10</span>
+        <input id="mach-slider" type="range" min="0" max="6" step="0.01" value="0.10">
+      </label>
+      <label>Reynolds <span class="val" id="re-val">2.0e5</span>
+        <input id="re-slider" type="range" min="3" max="8" step="0.05" value="5.3">
+      </label>
+      <label>Angle of attack <span class="val" id="alpha-val">4.0&deg;</span>
+        <input id="alpha-slider" type="range" min="-15" max="20" step="0.1" value="4">
+      </label>
+    </section>
+
+    <section>
+      <h2>Simulation</h2>
+      <label>Engine
+        <select id="engine-select">
+          <option value="auto" selected>Auto (LBM &lt; M 0.3 &le; Euler)</option>
+          <option value="lbm">LBM - viscous, M &lt; 0.3</option>
+          <option value="euler">Euler - compressible, shocks</option>
+          <option value="theory">Theory - instant panel/Ackeret</option>
+        </select>
+      </label>
+      <label>Grid
+        <select id="res-select">
+          <option value="768x384">768 x 384 (fast)</option>
+          <option value="1280x640" selected>1280 x 640 (balanced)</option>
+          <option value="2048x1024">2048 x 1024 (fine)</option>
+        </select>
+      </label>
+      <label>Steps / frame <span class="val" id="speed-val">6</span>
+        <input id="speed-slider" type="range" min="1" max="24" step="1" value="6">
+      </label>
+      <div class="row">
+        <button id="btn-run" class="btn primary">&#9654; Run</button>
+        <button id="btn-reset" class="btn">Reset</button>
+        <button id="btn-ff" class="btn" title="Advance 2000 steps without rendering">&#9193; 2000</button>
+      </div>
+      <div id="ff-progress" class="progress hidden"><div></div></div>
+    </section>
+
+    <section>
+      <h2>Display</h2>
+      <label>Field <select id="field-select"></select></label>
+      <label>Colormap
+        <select id="cmap-select">
+          <option value="0" selected>Viridis</option>
+          <option value="1">Inferno</option>
+          <option value="2">Diverging</option>
+        </select>
+      </label>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="particles-check" checked> Particles</label>
+      </div>
+      <div class="row">
+        <label class="mini">min <input id="range-lo" type="number" step="0.1"></label>
+        <label class="mini">max <input id="range-hi" type="number" step="0.1"></label>
+      </div>
+    </section>
+  </aside>
+
+  <!-- ======================= main view ======================= -->
+  <main>
+    <div id="canvas-wrap">
+      <canvas id="gpu-canvas"></canvas>
+      <canvas id="cpu-canvas" class="hidden"></canvas>
+      <canvas id="overlay-canvas"></canvas>
+      <canvas id="colorbar" width="180" height="30"></canvas>
+      <div id="hud" class="dim"></div>
+      <div id="gpu-error" class="hidden">
+        <h3>WebGPU not available</h3>
+        <p>The LBM and Euler engines need WebGPU (Chrome/Edge 113+, Safari 18+, Firefox 141+).
+        The <b>Theory engine</b> (panel method + supersonic linear theory) still works below,
+        with a potential-flow visualization.</p>
+      </div>
+    </div>
+
+    <!-- ======================= bottom panel ======================= -->
+    <div id="panel">
+      <nav id="tabs">
+        <button class="tab-btn active" data-tab="results">Results</button>
+        <button class="tab-btn" data-tab="plots">Plots</button>
+        <button class="tab-btn" data-tab="validation">Validation</button>
+        <button class="tab-btn" data-tab="help">Help</button>
+      </nav>
+
+      <div id="tab-results" class="tab active">
+        <div class="readouts">
+          <div class="readout"><span class="label">C<sub>L</sub></span><span id="out-cl" class="num">-</span></div>
+          <div class="readout"><span class="label">C<sub>D</sub></span><span id="out-cd" class="num">-</span></div>
+          <div class="readout"><span class="label">C<sub>M,c/4</sub></span><span id="out-cm" class="num">-</span></div>
+          <div class="readout"><span class="label">L/D</span><span id="out-ld" class="num">-</span></div>
+          <div class="readout wide"><span class="label">convergence</span><canvas id="conv-canvas" width="220" height="46"></canvas></div>
+        </div>
+        <div id="out-source" class="dim"></div>
+        <div id="theory-out"></div>
+        <div class="row">
+          <button id="btn-pin" class="btn small">Pin to polar</button>
+          <button id="btn-sweep" class="btn small" title="Automatic alpha sweep with the active solver">&alpha; sweep</button>
+          <button id="btn-csv" class="btn small">Export CSV</button>
+        </div>
+      </div>
+
+      <div id="tab-plots" class="tab">
+        <div class="plots-grid">
+          <div>
+            <div class="plot-head">Surface pressure <button id="btn-sample-cp" class="btn small">Sample from solver</button></div>
+            <canvas id="cp-canvas" class="chart"></canvas>
+          </div>
+          <div>
+            <div class="plot-head">Lift polar</div>
+            <canvas id="polar-canvas" class="chart"></canvas>
+          </div>
+          <div>
+            <div class="plot-head">Force history</div>
+            <canvas id="hist-canvas" class="chart"></canvas>
+          </div>
+          <div>
+            <div class="plot-head">Drag polar</div>
+            <canvas id="drag-canvas" class="chart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-validation" class="tab">
+        <div class="row spread">
+          <span class="dim">Computed values are compared against wind-tunnel data, exact shock-expansion theory, and panel-method references. <b>Solver rows appear after the run converges.</b></span>
+          <button id="btn-revalidate" class="btn small">Re-check</button>
+        </div>
+        <table id="valid-table">
+          <thead><tr><th>Check</th><th>Computed</th><th>Reference</th><th>&Delta;</th><th>Status</th><th>Notes</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="tab-help" class="tab">
+        <div class="help">
+          <h3>Engines</h3>
+          <p><b>LBM</b> (M &lt; 0.3): D2Q9 lattice-Boltzmann with Smagorinsky LES. Viscous and unsteady - Reynolds number is the physics knob; expect vortex shedding and stall-like separation. Forces via momentum exchange.</p>
+          <p><b>Euler</b> (M 0.3-6): compressible finite-volume solver (MUSCL + HLLC). Captures shocks, expansion fans, transonic buffet, bow shocks. Inviscid: drag = wave drag only; the app adds an empirical friction Cd<sub>0</sub> where relevant. Calorically perfect gas - above M~4-5 treat results as qualitative.</p>
+          <p><b>Theory</b>: Hess-Smith panel method (+ Karman-Tsien compressibility) below M 0.7; Ackeret linearized theory above M 1.15; exact shock-expansion for the diamond airfoil. Instant, no GPU needed.</p>
+          <h3>Validation</h3>
+          <p>The Validation tab auto-compares each converged run against: Abbott &amp; von Doenhoff wind-tunnel polars (NACA 0012/2412/4412, Re 6e6), RAE 2822 Case 6 (M 0.725), exact diamond-airfoil shock-expansion, Ackeret theory, and the panel method. Status: <span class="pill pass">pass</span> <span class="pill warn">check</span> <span class="pill fail">off</span> <span class="pill info">info</span>.</p>
+          <h3>Trust guide</h3>
+          <p>Cl from LBM/Euler: good (~5-15%) for attached flow. Cd: trust LBM only at Re &lt; ~1e5; at flight Reynolds numbers use the empirical estimate or wave-drag + friction. Staircase immersed boundaries cost ~5-15% accuracy - the "fine" grid helps. No transition modeling, no real-gas effects.</p>
+          <h3>Tips</h3>
+          <p>Use <b>&#9193; 2000</b> to converge steady cases quickly. The &alpha;-sweep button builds a solver polar automatically. Mach &amp; angle changes apply live - watch shocks move. Custom airfoils: paste any UIUC-format .dat file.</p>
+          <h3>Credits</h3>
+          <p class="dim">Airfoil coordinates: UIUC Airfoil Coordinates Database (M. Selig). Wind-tunnel data: Abbott &amp; von Doenhoff (1959). RAE 2822: AGARD AR-138. Colormaps: matplotlib (polynomial fits by M. Zucker). Educational tool - not for engineering sign-off.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<footer id="status-line" class="dim">loading...</footer>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
