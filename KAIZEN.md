@@ -5,6 +5,11 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.9 — 2026-06-10
+- Add: **URL state sharing** — the hash tracks airfoil/M/Re/α/engine/grid
+  (`#af=rae2822&m=0.73&...`), restored on load; copy the address-bar link to
+  share an exact case. Custom pasted airfoils are excluded (not encodable).
+
 ### v0.1.8 — 2026-06-10
 - Add: **Bouzidi interpolated bounce-back** for the LBM engine (backlog #1).
   Per-link wall fractions q are computed from the true outline at geometry
@@ -109,8 +114,7 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 1. **Residual Euler numerical drag** (~0.01-0.02 at subsonic/transonic) — entropy generation at the staircase quadrature; cut cells or higher-order wall pressure would shrink it.
 2. **Residual LBM Cl bias** (~6-8% high pre-stall at default grid) — likely wall-function / resolution; finer grid or multi-relaxation-time collision would help.
-3. **URL state sharing** — encode airfoil/M/Re/α in the hash for shareable cases.
-4. **Local time stepping** for steady Euler cases (3–5× faster convergence).
+3. **Local time stepping** for steady Euler cases (3–5× faster convergence).
 5. **LBM wall function** or grid refinement near the surface for better high-Re Cd.
 6. **Drag decomposition display** (pressure vs friction vs wave) in Results tab.
 7. **PNG export** of canvas + charts.

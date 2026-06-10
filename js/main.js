@@ -28,6 +28,7 @@ const state = {
 
 async function init() {
   populateAirfoils();
+  applyHashState();
   bindUI();
   setAirfoilLocal(state.airfoilId);
 
@@ -241,11 +242,12 @@ function bindUI() {
   });
   bindSlider('speed-slider', 'speed-val', (v) => v.toFixed(0), (v) => { state.speed = v; });
 
-  $('engine-select').addEventListener('change', (e) => { state.engineSel = e.target.value; scheduleRebuild(); });
+  $('engine-select').addEventListener('change', (e) => { state.engineSel = e.target.value; scheduleRebuild(); updateHash(); });
   $('res-select').addEventListener('change', (e) => {
     state.res = e.target.value.split('x').map(Number);
     if (state.engine) { state.engine.destroy(); state.engine = null; }
     scheduleRebuild();
+    updateHash();
   });
 
   $('btn-run').addEventListener('click', () => setRunning(!state.running));
@@ -306,6 +308,7 @@ function onFlowChange() {
   computeTheoryDebounced();
   drawOverlay();
   if (activeEngineKind() === 'theory') renderCPUSoon();
+  updateHash();
 }
 
 function updateRegimeLabel() {
@@ -348,6 +351,7 @@ function setAirfoilLocal(id, coordsOverride = null, nameOverride = '') {
     computeTheoryDebounced();
     if (activeEngineKind() === 'theory') renderCPUSoon();
     drawOverlay();
+    updateHash();
   } catch (e) {
     setStatus('Airfoil error: ' + e.message);
   }
@@ -620,6 +624,46 @@ async function sampleCp(manual = true) {
     if (!isTabActive('plots')) document.querySelector('[data-tab="plots"]').click();
   }
 }
+
+// ============================================================ URL hash state
+
+/** Restore airfoil/flow/engine/grid from the URL hash (shareable cases). */
+function applyHashState() {
+  const h = location.hash.replace(/^#/, '');
+  if (!h) return;
+  try {
+    const p = new URLSearchParams(h);
+    const af = p.get('af');
+    if (af && af !== '__custom' &&
+        (PRESETS.some(q => q.id === af) || /^(naca\s*)?\d{4,5}$/i.test(af))) {
+      state.airfoilId = af;
+    }
+    const m = parseFloat(p.get('m'));
+    if (Number.isFinite(m)) state.M = Math.min(6, Math.max(0, m));
+    const re = parseFloat(p.get('re'));
+    if (Number.isFinite(re)) state.Re = Math.min(1e8, Math.max(1e3, re));
+    const a = parseFloat(p.get('a'));
+    if (Number.isFinite(a)) state.alphaDeg = Math.min(20, Math.max(-15, a));
+    const eng = p.get('eng');
+    if (['auto', 'lbm', 'euler', 'theory'].includes(eng)) state.engineSel = eng;
+    const res = p.get('res');
+    if (['768x384', '1280x640', '2048x1024'].includes(res)) state.res = res.split('x').map(Number);
+    // reflect into controls before bindUI() reads them for the value labels
+    if (PRESETS.some(q => q.id === state.airfoilId)) $('airfoil-select').value = state.airfoilId;
+    $('mach-slider').value = state.M;
+    $('re-slider').value = Math.log10(state.Re);
+    $('alpha-slider').value = state.alphaDeg;
+    $('engine-select').value = state.engineSel;
+    $('res-select').value = `${state.res[0]}x${state.res[1]}`;
+  } catch (e) { console.warn('Could not parse URL hash state:', e); }
+}
+
+const updateHash = debounce(() => {
+  if (state.airfoilId === '__custom') return; // pasted coords aren't encodable
+  const p = `af=${state.airfoilId}&m=${state.M.toFixed(2)}&re=${state.Re.toExponential(1)}` +
+    `&a=${state.alphaDeg.toFixed(1)}&eng=${state.engineSel}&res=${state.res[0]}x${state.res[1]}`;
+  history.replaceState(null, '', '#' + p);
+}, 400);
 
 // ============================================================ zoom view
 
