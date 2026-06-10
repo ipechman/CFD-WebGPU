@@ -198,7 +198,10 @@ export function resample(coords, n = 70) {
 // ---------------------------------------------------------------- rasterization
 
 /**
- * Rasterize airfoil onto grid. Returns Uint32Array(nx*ny), 1 = solid.
+ * Rasterize airfoil onto grid. Returns Uint32Array(nx*ny):
+ *   0 = fluid, 1 = interior solid,
+ *   2..1021 = boundary solid carrying the true outline-normal angle,
+ *   quantized over [0, 2pi) as value-2 in 1019 steps (ghost-fluid mirror).
  * chordPx: chord length in cells; (ox, oy): LE position in cells.
  * Scanline fill + edge dilation (guarantees min ~1.5 cell thickness, closed body).
  */
@@ -233,7 +236,73 @@ export function rasterize(coords, nx, ny, chordPx, ox, oy) {
       if (ddx * ddx + ddy * ddy < rad * rad) mask[j * nx + i] = 1;
     }
   }
+  // encode true surface normals into boundary solid cells (any solid cell
+  // with a fluid 4-neighbor): nearest outline segment's perpendicular
+  for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+    const idx = j * nx + i;
+    if (!mask[idx]) continue;
+    if (mask[idx - 1] && mask[idx + 1] && mask[idx - nx] && mask[idx + nx]) continue;
+    const px = i + 0.5, py = j + 0.5;
+    let best = Infinity, pnx = 0, pny = 1;
+    for (let k = 0; k < m; k++) {
+      const [x1, y1] = poly[k], [x2, y2] = poly[k + 1];
+      const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1e-12;
+      const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / L2));
+      const ddx = px - (x1 + t * dx), ddy = py - (y1 + t * dy);
+      const d = ddx * ddx + ddy * ddy;
+      if (d < best) { best = d; pnx = -dy; pny = dx; } // perpendicular; sign irrelevant for reflection
+    }
+    const th = Math.atan2(pny, pnx); // [-pi, pi]
+    mask[idx] = 2 + Math.round((th + Math.PI) / (2 * Math.PI) * 1019);
+  }
   return mask;
+}
+
+/**
+ * Per-link wall distances for interpolated (Bouzidi) bounce-back.
+ * For every fluid cell with a solid neighbor along a D2Q9 direction k=1..8,
+ * the fraction q in (0,1] of the link covered before crossing the outline is
+ * quantized to a byte (0 = no data -> halfway fallback) and packed 8 bytes
+ * per cell into 2 u32 words: [k1..k4 | k5..k8]. Direction order matches the
+ * E table in lbm.wgsl.
+ */
+export function wallLinkFractions(coords, mask, nx, ny, chordPx, ox, oy) {
+  const E = [[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, 1], [-1, -1], [1, -1]];
+  const poly = coords.map(([x, y]) => [ox + x * chordPx, oy + y * chordPx]);
+  const m = poly.length - 1;
+  const out = new Uint32Array(nx * ny * 2);
+  for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+    const idx = j * nx + i;
+    if (mask[idx]) continue;
+    let w0 = 0, w1 = 0, any = false;
+    for (let k = 1; k <= 8; k++) {
+      const [ex, ey] = E[k];
+      if (!mask[(j + ey) * nx + (i + ex)]) continue;
+      any = true;
+      // intersect the link [center, center + e_k] with the outline
+      const px = i + 0.5, py = j + 0.5;
+      let tBest = Infinity;
+      for (let s = 0; s < m; s++) {
+        const ax = poly[s][0], ay = poly[s][1];
+        const bx = poly[s + 1][0] - ax, by = poly[s + 1][1] - ay;
+        const den = ex * by - ey * bx;
+        if (Math.abs(den) < 1e-12) continue;
+        const qx = ax - px, qy = ay - py;
+        const t = (qx * by - qy * bx) / den;
+        const u = (qx * ey - qy * ex) / den;
+        if (u >= 0 && u <= 1 && t > 1e-6 && t < tBest) tBest = t;
+      }
+      // mask dilation can sit slightly proud of the outline: accept hits a
+      // little past the link end, otherwise fall back to the halfway wall
+      let q = 0.5;
+      if (tBest <= 1.25) q = Math.min(1, Math.max(0.05, tBest));
+      const b = 1 + Math.round(q * 254);
+      if (k <= 4) w0 |= b << (8 * (k - 1));
+      else w1 |= b << (8 * (k - 5));
+    }
+    if (any) { out[idx * 2] = w0 >>> 0; out[idx * 2 + 1] = w1 >>> 0; }
+  }
+  return out;
 }
 
 /** Nearest point on outline (for Cp surface mapping). Returns {xc, side} side:+1 upper,-1 lower. */

@@ -1,7 +1,7 @@
 // WebGPU D2Q9 Lattice-Boltzmann engine wrapper (viscous, incompressible, M < 0.3).
 // Physics knob is Reynolds number; lattice inflow speed is fixed at 0.1 (Ma_lat ~ 0.17).
 
-import { rasterize } from './airfoils.js';
+import { rasterize, wallLinkFractions } from './airfoils.js';
 
 const U_LAT = 0.1;          // lattice inflow speed
 const RAMP_STEPS = 600;     // inflow ramp-up
@@ -25,6 +25,7 @@ export class LBMEngine {
     e.bufA = device.createBuffer({ size: 9 * n * 4, usage: GPUBufferUsage.STORAGE });
     e.bufB = device.createBuffer({ size: 9 * n * 4, usage: GPUBufferUsage.STORAGE });
     e.solidBuf = device.createBuffer({ size: n * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    e.qBuf = device.createBuffer({ size: n * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); // Bouzidi link fractions
     e.uni = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     e.forceBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     e.stagingBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
@@ -42,6 +43,7 @@ export class LBMEngine {
         { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
         { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
         { binding: 5, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+        { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
       ],
     });
     const pl = device.createPipelineLayout({ bindGroupLayouts: [layout] });
@@ -58,6 +60,7 @@ export class LBMEngine {
         { binding: 3, resource: { buffer: e.solidBuf } },
         { binding: 4, resource: { buffer: e.forceBuf } },
         { binding: 5, resource: e.macroView },
+        { binding: 6, resource: { buffer: e.qBuf } },
       ],
     });
     e.bgStepAB = mkBG(e.pipeStep, e.bufA, e.bufB);
@@ -107,6 +110,8 @@ export class LBMEngine {
     const mask = rasterize(coords, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
     this.mask = mask;
     this.device.queue.writeBuffer(this.solidBuf, 0, mask);
+    const q = wallLinkFractions(coords, mask, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
+    this.device.queue.writeBuffer(this.qBuf, 0, q);
   }
 
   reset() {
@@ -179,7 +184,7 @@ export class LBMEngine {
   get stepsPerChord() { return this.chord / U_LAT; }
 
   destroy() {
-    for (const b of [this.bufA, this.bufB, this.solidBuf, this.uni, this.forceBuf, this.stagingBuf]) b.destroy();
+    for (const b of [this.bufA, this.bufB, this.solidBuf, this.qBuf, this.uni, this.forceBuf, this.stagingBuf]) b.destroy();
     this.macroTex.destroy();
   }
 }

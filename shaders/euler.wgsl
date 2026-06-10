@@ -20,7 +20,7 @@ struct Params {
   fscale: f32,
   cmx: f32,
   cmy: f32,
-  pad0: f32,
+  vmax: f32,  // velocity bound; sized for the hottest recent Mach (see euler.js)
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -32,12 +32,26 @@ struct Params {
 
 const RHO_MIN: f32 = 1e-6;
 const P_MIN: f32 = 1e-7;
+const BIG: f32 = 1e12;
 
 fn prim(U: vec4f) -> vec4f {
   let rho = max(U.x, RHO_MIN);
-  let u = U.y / rho;
-  let v = U.z / rho;
+  var u = U.y / rho;
+  var v = U.z / rho;
+  // pressure from the UNclamped velocity, so the clamp below discards excess
+  // kinetic energy instead of converting it to pressure (a p-feedback there
+  // detonates the field: p up -> a up -> CFL violated -> more clamping)
   let p = max((P.gamma - 1.0) * (U.w - 0.5 * rho * (u * u + v * v)), P_MIN);
+  // total-enthalpy speed limit (1.25x margin): a vacuum-floor cell dividing
+  // finite momentum by RHO_MIN would otherwise drive dt*|u| far past CFL.
+  // P.vmax tracks the hottest recent Mach (euler.js), not the instantaneous
+  // one - a live Mach drop must not clamp the still-fast old field.
+  let V2 = u * u + v * v;
+  if (V2 > P.vmax * P.vmax) {
+    let sc = P.vmax / sqrt(V2);
+    u *= sc;
+    v *= sc;
+  }
   return vec4f(rho, u, v, p);
 }
 
@@ -100,6 +114,53 @@ fn minmod(a: vec4f, b: vec4f) -> vec4f {
   return s * max(vec4f(0.0), min(abs(a), s * b));
 }
 
+// Wall force: staircase-face quadrature of the adjacent fluid static
+// pressure (zero-order wall extrapolation). With true-normal ghosts the
+// face flux carries convective slip terms, and an axis-mirrored star
+// pressure would turn the (physical) tangential slip into spurious ram
+// pressure on every staircase step - plain cell pressure is consistent.
+fn wallP(W0: vec4f, ax: u32) -> f32 {
+  return W0.w;
+}
+
+// 1D characteristic far-field along the sweep axis (Riemann invariants).
+// Wi = boundary-adjacent interior primitives; sgn = outward normal sign.
+// Subsonic boundaries absorb outgoing waves instead of reflecting them
+// (hard freestream Dirichlet acted like wind-tunnel walls ~1.6 chords away).
+fn farfield(Wi: vec4f, sgn: f32) -> vec4f {
+  let g = P.gamma;
+  let Wf = freestream();
+  var uni: f32;
+  var unf: f32;
+  var uti: f32;
+  var utf: f32;
+  if (P.axis == 0u) {
+    uni = sgn * Wi.y; unf = sgn * Wf.y; uti = Wi.z; utf = Wf.z;
+  } else {
+    uni = sgn * Wi.z; unf = sgn * Wf.z; uti = Wi.y; utf = Wf.y;
+  }
+  let ai = sqrt(g * Wi.w / Wi.x);
+  if (uni >= ai) { return Wi; }        // supersonic outflow: extrapolate
+  if (unf <= -1.0) { return Wf; }      // supersonic inflow: freestream (a_inf = 1)
+  let Rp = uni + 2.0 * ai / (g - 1.0); // outgoing invariant (interior)
+  let Rm = unf - 2.0 / (g - 1.0);      // incoming invariant (freestream)
+  let unb = 0.5 * (Rp + Rm);
+  let ab = max(0.25 * (g - 1.0) * (Rp - Rm), 0.02);
+  var s: f32;
+  var ut: f32;
+  if (unb > 0.0) { // outflow: entropy & tangential velocity advect from inside
+    s = Wi.w / pow(Wi.x, g);
+    ut = uti;
+  } else {         // inflow: from freestream
+    s = Wf.w / pow(Wf.x, g);
+    ut = utf;
+  }
+  let rho = pow(ab * ab / (g * s), 1.0 / (g - 1.0));
+  let p = rho * ab * ab / g;
+  if (P.axis == 0u) { return vec4f(rho, sgn * unb, ut, p); }
+  return vec4f(rho, ut, sgn * unb, p);
+}
+
 // Sample primitive state at offset along sweep axis; flags solid/ghost cells.
 // W0: querying (fluid) cell's primitives, used for solid mirroring.
 fn sampleW(x: i32, y: i32, off: i32, W0: vec4f, isGhost: ptr<function, bool>) -> vec4f {
@@ -107,16 +168,31 @@ fn sampleW(x: i32, y: i32, off: i32, W0: vec4f, isGhost: ptr<function, bool>) ->
   var py = y;
   if (P.axis == 0u) { px += off; } else { py += off; }
   *isGhost = false;
-  if (px < 0 || py < 0 || py >= i32(P.ny)) { *isGhost = true; return freestream(); }
-  if (px >= i32(P.nx)) {
-    *isGhost = true;
-    return prim(Uin[u32(py) * P.nx + (P.nx - 1u)]); // outflow: zero gradient
-  }
+  // domain edges: characteristic far-field from the boundary-adjacent cell
+  // (px only leaves range during x sweeps, py only during y sweeps)
+  if (px < 0) { *isGhost = true; return farfield(prim(Uin[u32(y) * P.nx]), -1.0); }
+  if (px >= i32(P.nx)) { *isGhost = true; return farfield(prim(Uin[u32(y) * P.nx + (P.nx - 1u)]), 1.0); }
+  if (py < 0) { *isGhost = true; return farfield(prim(Uin[u32(x)]), -1.0); }
+  if (py >= i32(P.ny)) { *isGhost = true; return farfield(prim(Uin[(P.ny - 1u) * P.nx + u32(x)]), 1.0); }
   let idx = u32(py) * P.nx + u32(px);
-  if (solid[idx] == 1u) {
+  let sv = solid[idx];
+  if (sv != 0u) {
     *isGhost = true;
-    var Wm = W0; // slip-wall mirror of the querying cell
-    if (P.axis == 0u) { Wm.y = -W0.y; } else { Wm.z = -W0.z; }
+    var Wm = W0; // slip-wall ghost of the querying cell
+    if (sv >= 2u) {
+      // boundary cell carries the true outline normal (see rasterize):
+      // reflect velocity about the actual surface tangent instead of the
+      // sweep axis - the staircase mirror weakens the Kutta condition
+      let th = f32(sv - 2u) / 1019.0 * 6.28318531 - 3.14159265;
+      let n = vec2f(cos(th), sin(th));
+      let un = W0.y * n.x + W0.z * n.y;
+      Wm.y = W0.y - 2.0 * un * n.x;
+      Wm.z = W0.z - 2.0 * un * n.y;
+    } else if (P.axis == 0u) {
+      Wm.y = -W0.y;
+    } else {
+      Wm.z = -W0.z;
+    }
     return Wm;
   }
   return prim(Uin[idx]);
@@ -138,7 +214,7 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= P.nx || gid.y >= P.ny) { return; }
   let idx = gid.y * P.nx + gid.x;
 
-  if (solid[idx] == 1u) {
+  if (solid[idx] != 0u) {
     Uout[idx] = Uin[idx];
     if (P.writeMacro == 1u) {
       textureStore(macroTex, vec2i(x, y), vec4f(0.0, 0.0, 1.0, 0.0));
@@ -174,6 +250,10 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   let FR = hllc(Rfl, Rfr, P.axis);
 
   var U1 = Uin[idx] - P.dtdx * (FR - FL);
+  // scrub non-finite cells (extreme transients, e.g. live Mach scrubbing):
+  // one poisoned cell otherwise NaN-floods the whole domain
+  let ok = abs(U1.x) < BIG && abs(U1.y) < BIG && abs(U1.z) < BIG && abs(U1.w) < BIG;
+  if (!ok) { U1 = cons(freestream()); }
   U1 = cons(prim(U1)); // positivity clamp
   Uout[idx] = U1;
 
@@ -181,18 +261,19 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   if (P.axis == 0u) {
     var sxp = false;
     var sxm = false;
-    if (x + 1 < i32(P.nx)) { sxp = solid[idx + 1u] == 1u; }
-    if (x - 1 >= 0) { sxm = solid[idx - 1u] == 1u; }
+    if (x + 1 < i32(P.nx)) { sxp = solid[idx + 1u] != 0u; }
+    if (x - 1 >= 0) { sxm = solid[idx - 1u] != 0u; }
     if (sxp || sxm) {
       var fx = 0.0;
       var tz = 0.0;
-      if (sxp) { // body at +x: wall pressure = x-momentum flux component
-        fx += FR.y;
-        tz += -(f32(y) + 0.5 - P.cmy) * FR.y;
+      let pw = wallP(W0, 0u);
+      if (sxp) { // body at +x
+        fx += pw;
+        tz += -(f32(y) + 0.5 - P.cmy) * pw;
       }
       if (sxm) {
-        fx -= FL.y;
-        tz += (f32(y) + 0.5 - P.cmy) * FL.y;
+        fx -= pw;
+        tz += (f32(y) + 0.5 - P.cmy) * pw;
       }
       atomicAdd(&forceAcc[0], i32(round(fx * P.fscale)));
       atomicAdd(&forceAcc[2], i32(round(tz * P.fscale * 0.01)));
@@ -200,18 +281,19 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
   } else {
     var syp = false;
     var sym = false;
-    if (y + 1 < i32(P.ny)) { syp = solid[idx + P.nx] == 1u; }
-    if (y - 1 >= 0) { sym = solid[idx - P.nx] == 1u; }
+    if (y + 1 < i32(P.ny)) { syp = solid[idx + P.nx] != 0u; }
+    if (y - 1 >= 0) { sym = solid[idx - P.nx] != 0u; }
     if (syp || sym) {
       var fy = 0.0;
       var tz = 0.0;
+      let pw = wallP(W0, 1u);
       if (syp) {
-        fy += FR.z;
-        tz += (f32(x) + 0.5 - P.cmx) * FR.z;
+        fy += pw;
+        tz += (f32(x) + 0.5 - P.cmx) * pw;
       }
       if (sym) {
-        fy -= FL.z;
-        tz -= (f32(x) + 0.5 - P.cmx) * FL.z;
+        fy -= pw;
+        tz -= (f32(x) + 0.5 - P.cmx) * pw;
       }
       atomicAdd(&forceAcc[1], i32(round(fy * P.fscale)));
       atomicAdd(&forceAcc[2], i32(round(tz * P.fscale * 0.01)));

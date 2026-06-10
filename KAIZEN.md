@@ -5,6 +5,74 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.9 — 2026-06-10
+- Add: **URL state sharing** — the hash tracks airfoil/M/Re/α/engine/grid
+  (`#af=rae2822&m=0.73&...`), restored on load; copy the address-bar link to
+  share an exact case. Custom pasted airfoils are excluded (not encodable).
+
+### v0.1.8 — 2026-06-10
+- Add: **Bouzidi interpolated bounce-back** for the LBM engine (backlog #1).
+  Per-link wall fractions q are computed from the true outline at geometry
+  setup (8 bytes/cell, new storage buffer) and the streaming step interpolates
+  the bounced population to the actual wall position; momentum exchange uses
+  the interpolated outgoing population and the q-weighted wall point.
+  Measured (NACA 2412, M0.1, Re 2e5 → resolved ~9e4, default grid):
+  Cl(α4) 0.765 → **0.703** vs 0.65 A&vD (17.7% → 8.2% high);
+  Cl(α8) **1.125** vs 1.06 (6%). α14 shedding stable; TGV test unchanged.
+
+### v0.1.7 — 2026-06-10
+- Add: **ghost-fluid boundary with true surface normals** for the Euler engine
+  (backlog #1). The rasterizer encodes the nearest-outline normal into each
+  boundary solid cell; ghost states reflect velocity about the actual surface
+  tangent instead of the sweep axis. Wall forces switch to staircase-face
+  pressure quadrature (the face flux now carries physical slip terms).
+  Measured at the default grid:
+  - NACA 2412 M0.5 α4: Cl 0.513 → **0.864** vs 0.849 panel+PG (40% low → 1.8%)
+  - RAE 2822 Case 6: Cl 0.221 → **0.753** vs 0.743 exp (70% low → 1.3%)
+  - Diamond M2 α4: Cl **0.163** vs 0.1634 exact (0.2%); wave Cd 0.058 →
+    **0.0259** vs 0.0265 exact (120% high → 2.3%)
+  - All cases now converge *steady* (was time-averaged/oscillatory); M6 and
+    the live Mach-scrub gauntlet remain stable. LBM results bit-identical.
+- Docs: retired the now-false "staircase Kutta deficit / 2x wave drag" notes
+  in validation + Help; trust guide updated with the new validated numbers.
+
+### v0.1.6 — 2026-06-10
+- Add: **scroll-wheel zoom** on the flow view (cursor-anchored, 1-12×,
+  double-click resets; HUD shows the factor). The hover probe maps through the
+  same view transform, so probed x/c stays correct while zoomed.
+- Fix: **validation honesty** — rows now pass/fail only when their reference
+  actually applies. Cd vs A&vD across >0.7 decades of Re is condition mismatch
+  (info), replaced by a matched-Re empirical row; LBM's *resolved* Re (after
+  the stability clamp) is used everywhere; attached-flow references go info
+  below Re~3e4 (separated regime) and past α~10° (panel never stalls); known
+  staircase deficits (subsonic Euler Cl, supersonic wave drag) stay failing
+  but say why. Default case went from a wall of >70% "fails" to 3 pass /
+  2 check / honest info — without softening any genuine failure.
+
+### v0.1.5 — 2026-06-10
+- Add: **characteristic far-field BCs** for the Euler engine (1D Riemann
+  invariants along each sweep axis, all four boundaries). Subsonic/transonic
+  boundaries absorb outgoing waves instead of reflecting them. Measured (RAE
+  2822, M 0.73, α 2.9, default grid): Cl 0.221 → 0.309, spurious Cd
+  0.095 → 0.061. Supersonic cases unchanged (correct limit behavior).
+- Change: Euler chord nx/6.5 → nx/5.5, LE at 1.7c (absorbing boundaries can
+  sit closer, so spend domain on surface resolution): diamond M2 wave-drag
+  error 120% → 100%, transonic spurious Cd −15% more.
+- Honesty: Help/trust guide now states subsonic Euler Cl reads 30-40% low
+  (staircase Kutta deficit — resolution study: Cl 0.31 @197c/c → 0.39 @315c/c
+  vs 0.74 target). Cut-cell boundary (backlog #1) is the real fix.
+
+### v0.1.4 — 2026-06-10
+- Fix: **NaN flood** (diamond, M6, high α, live Mach changes). Three layers:
+  (1) `prim()` bounds velocity at the total-enthalpy limit — a vacuum-floor cell
+  dividing finite momentum by RHO_MIN was the NaN seed; the bound discards
+  excess KE rather than converting it to pressure (a p-feedback detonates the
+  field). (2) Non-finite cells are scrubbed to freestream (one poisoned cell
+  otherwise floods the domain). (3) Live Mach changes keep dt and the velocity
+  bound sized for the hottest recent Mach until the old flow flushes out
+  (~20%/chord decay) — dropping M live used to violate CFL instantly.
+  Regression: vacuum-cell prim unit check + fixed-dt deep-rarefaction march.
+
 ### v0.1.3 — 2026-06-10
 - Fix: fast-forward and α-sweep now run **to force convergence** (batched, with a
   chord-travel cap) instead of fixed step counts. 2000 steps was under one chord
@@ -44,10 +112,9 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Backlog (small, prioritized)
 
-1. **Characteristic far-field BC** for subsonic Euler outlet (reduces reflections, faster convergence).
-2. **Cut-cell boundary** (or ghost-fluid with true normals) to replace staircase walls — biggest single accuracy win.
-3. **URL state sharing** — encode airfoil/M/Re/α in the hash for shareable cases.
-4. **Local time stepping** for steady Euler cases (3–5× faster convergence).
+1. **Residual Euler numerical drag** (~0.01-0.02 at subsonic/transonic) — entropy generation at the staircase quadrature; cut cells or higher-order wall pressure would shrink it.
+2. **Residual LBM Cl bias** (~6-8% high pre-stall at default grid) — likely wall-function / resolution; finer grid or multi-relaxation-time collision would help.
+3. **Local time stepping** for steady Euler cases (3–5× faster convergence).
 5. **LBM wall function** or grid refinement near the surface for better high-Re Cd.
 6. **Drag decomposition display** (pressure vs friction vs wave) in Results tab.
 7. **PNG export** of canvas + charts.
