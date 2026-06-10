@@ -114,6 +114,44 @@ fn minmod(a: vec4f, b: vec4f) -> vec4f {
   return s * max(vec4f(0.0), min(abs(a), s * b));
 }
 
+// 1D characteristic far-field along the sweep axis (Riemann invariants).
+// Wi = boundary-adjacent interior primitives; sgn = outward normal sign.
+// Subsonic boundaries absorb outgoing waves instead of reflecting them
+// (hard freestream Dirichlet acted like wind-tunnel walls ~1.6 chords away).
+fn farfield(Wi: vec4f, sgn: f32) -> vec4f {
+  let g = P.gamma;
+  let Wf = freestream();
+  var uni: f32;
+  var unf: f32;
+  var uti: f32;
+  var utf: f32;
+  if (P.axis == 0u) {
+    uni = sgn * Wi.y; unf = sgn * Wf.y; uti = Wi.z; utf = Wf.z;
+  } else {
+    uni = sgn * Wi.z; unf = sgn * Wf.z; uti = Wi.y; utf = Wf.y;
+  }
+  let ai = sqrt(g * Wi.w / Wi.x);
+  if (uni >= ai) { return Wi; }        // supersonic outflow: extrapolate
+  if (unf <= -1.0) { return Wf; }      // supersonic inflow: freestream (a_inf = 1)
+  let Rp = uni + 2.0 * ai / (g - 1.0); // outgoing invariant (interior)
+  let Rm = unf - 2.0 / (g - 1.0);      // incoming invariant (freestream)
+  let unb = 0.5 * (Rp + Rm);
+  let ab = max(0.25 * (g - 1.0) * (Rp - Rm), 0.02);
+  var s: f32;
+  var ut: f32;
+  if (unb > 0.0) { // outflow: entropy & tangential velocity advect from inside
+    s = Wi.w / pow(Wi.x, g);
+    ut = uti;
+  } else {         // inflow: from freestream
+    s = Wf.w / pow(Wf.x, g);
+    ut = utf;
+  }
+  let rho = pow(ab * ab / (g * s), 1.0 / (g - 1.0));
+  let p = rho * ab * ab / g;
+  if (P.axis == 0u) { return vec4f(rho, sgn * unb, ut, p); }
+  return vec4f(rho, ut, sgn * unb, p);
+}
+
 // Sample primitive state at offset along sweep axis; flags solid/ghost cells.
 // W0: querying (fluid) cell's primitives, used for solid mirroring.
 fn sampleW(x: i32, y: i32, off: i32, W0: vec4f, isGhost: ptr<function, bool>) -> vec4f {
@@ -121,11 +159,12 @@ fn sampleW(x: i32, y: i32, off: i32, W0: vec4f, isGhost: ptr<function, bool>) ->
   var py = y;
   if (P.axis == 0u) { px += off; } else { py += off; }
   *isGhost = false;
-  if (px < 0 || py < 0 || py >= i32(P.ny)) { *isGhost = true; return freestream(); }
-  if (px >= i32(P.nx)) {
-    *isGhost = true;
-    return prim(Uin[u32(py) * P.nx + (P.nx - 1u)]); // outflow: zero gradient
-  }
+  // domain edges: characteristic far-field from the boundary-adjacent cell
+  // (px only leaves range during x sweeps, py only during y sweeps)
+  if (px < 0) { *isGhost = true; return farfield(prim(Uin[u32(y) * P.nx]), -1.0); }
+  if (px >= i32(P.nx)) { *isGhost = true; return farfield(prim(Uin[u32(y) * P.nx + (P.nx - 1u)]), 1.0); }
+  if (py < 0) { *isGhost = true; return farfield(prim(Uin[u32(x)]), -1.0); }
+  if (py >= i32(P.ny)) { *isGhost = true; return farfield(prim(Uin[(P.ny - 1u) * P.nx + u32(x)]), 1.0); }
   let idx = u32(py) * P.nx + u32(px);
   if (solid[idx] == 1u) {
     *isGhost = true;

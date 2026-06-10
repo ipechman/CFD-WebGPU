@@ -5,6 +5,19 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.5 — 2026-06-10
+- Add: **characteristic far-field BCs** for the Euler engine (1D Riemann
+  invariants along each sweep axis, all four boundaries). Subsonic/transonic
+  boundaries absorb outgoing waves instead of reflecting them. Measured (RAE
+  2822, M 0.73, α 2.9, default grid): Cl 0.221 → 0.309, spurious Cd
+  0.095 → 0.061. Supersonic cases unchanged (correct limit behavior).
+- Change: Euler chord nx/6.5 → nx/5.5, LE at 1.7c (absorbing boundaries can
+  sit closer, so spend domain on surface resolution): diamond M2 wave-drag
+  error 120% → 100%, transonic spurious Cd −15% more.
+- Honesty: Help/trust guide now states subsonic Euler Cl reads 30-40% low
+  (staircase Kutta deficit — resolution study: Cl 0.31 @197c/c → 0.39 @315c/c
+  vs 0.74 target). Cut-cell boundary (backlog #1) is the real fix.
+
 ### v0.1.4 — 2026-06-10
 - Fix: **NaN flood** (diamond, M6, high α, live Mach changes). Three layers:
   (1) `prim()` bounds velocity at the total-enthalpy limit — a vacuum-floor cell
@@ -55,8 +68,7 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Backlog (small, prioritized)
 
-1. **Characteristic far-field BC** for subsonic Euler outlet (reduces reflections, faster convergence).
-2. **Cut-cell boundary** (or ghost-fluid with true normals) to replace staircase walls — biggest single accuracy win.
+1. **Cut-cell boundary** (or ghost-fluid with true normals) to replace staircase walls — biggest single accuracy win. Measured need: subsonic Euler Cl 30-40% low, supersonic wave drag ~2x on thin sharp sections; both scale ~1/N with resolution.
 3. **URL state sharing** — encode airfoil/M/Re/α in the hash for shareable cases.
 4. **Local time stepping** for steady Euler cases (3–5× faster convergence).
 5. **LBM wall function** or grid refinement near the surface for better high-Re Cd.

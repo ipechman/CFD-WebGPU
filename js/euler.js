@@ -24,8 +24,10 @@ export class EulerEngine {
     e.device = device;
     e.nx = opts.nx; e.ny = opts.ny;
     e.ntot = e.nx * e.ny;
-    e.chord = e.nx / 6.5;
-    e.origin = [1.9 * e.chord, e.ny / 2];
+    // characteristic far-field BCs absorb waves, so boundaries can sit closer:
+    // spend the domain on surface resolution (staircase error drops ~1/N)
+    e.chord = e.nx / 5.5;
+    e.origin = [1.7 * e.chord, e.ny / 2];
     e.iter = 0;
     e.stepsSinceRead = 0;
     e.fscale = 1000;
