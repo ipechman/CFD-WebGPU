@@ -15,7 +15,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   airfoilId: 'naca2412', airfoilName: '', coords: null,
   M: 0.10, Re: 2e5, alphaDeg: 4.0,
-  engineSel: 'auto', res: [1280, 640],
+  engineSel: 'auto', res: [2048, 1024],
   field: 0, cmap: 0, lo: 0, hi: 1.8, particles: true,
   view: { cx: 0.5, cy: 0.5, zoom: 1 },
   running: false, speed: 6, busy: false, sweepCancel: false,
@@ -63,7 +63,13 @@ async function initGPU() {
     if (!navigator.gpu) return false;
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) return false;
-    const device = await adapter.requestDevice();
+    // large grids need storage buffers past the 128 MiB default limit
+    const device = await adapter.requestDevice({
+      requiredLimits: {
+        maxStorageBufferBindingSize: Math.min(adapter.limits.maxStorageBufferBindingSize, 1 << 30),
+        maxBufferSize: Math.min(adapter.limits.maxBufferSize, 1 << 30),
+      },
+    });
     device.lost.then((info) => {
       if (info.reason !== 'destroyed') {
         setStatus('GPU device lost (' + info.message + '). Reload the page.');
@@ -122,7 +128,14 @@ async function rebuildEngineInner() {
   $('cpu-canvas').classList.add('hidden');
   for (const id of gpuButtons) $(id).disabled = false;
 
-  const [nx, ny] = state.res;
+  let [nx, ny] = state.res;
+  // LBM is the memory ceiling: two D2Q9 buffers of 9 f32/cell each
+  if (9 * nx * ny * 4 > state.device.limits.maxStorageBufferBindingSize) {
+    setStatus(`Grid ${nx}x${ny} exceeds this GPU's storage-buffer limit - using 2048x1024.`);
+    state.res = [2048, 1024];
+    [nx, ny] = state.res;
+    $('res-select').value = '2048x1024';
+  }
   if (state.engine && state.engine.type === kind && state.engine.nx === nx) {
     state.engine.setFlow(state.M, state.Re, state.alphaDeg);
     return;
@@ -140,6 +153,7 @@ async function rebuildEngineInner() {
     state.renderer.attach(eng);
     populateFields(kind);
     resetRun();
+    drawOverlay();
     setStatus(`${kind.toUpperCase()} ready - ${nx}x${ny}, chord ${eng.chord.toFixed(0)} cells.`);
   } finally {
     state.busy = false;
@@ -679,7 +693,7 @@ function applyHashState() {
     const eng = p.get('eng');
     if (['auto', 'lbm', 'euler', 'theory'].includes(eng)) state.engineSel = eng;
     const res = p.get('res');
-    if (['768x384', '1280x640', '2048x1024'].includes(res)) state.res = res.split('x').map(Number);
+    if (['1280x640', '2048x1024', '2560x1280', '3072x1536'].includes(res)) state.res = res.split('x').map(Number);
     // reflect into controls before bindUI() reads them for the value labels
     if (PRESETS.some(q => q.id === state.airfoilId)) $('airfoil-select').value = state.airfoilId;
     $('mach-slider').value = state.M;
@@ -729,8 +743,9 @@ function bindZoom() {
     v.cx = wx - (sx - 0.5) / v.zoom;
     v.cy = wy - (sy - 0.5) / v.zoom;
     if (v.zoom <= 1.001) resetView(); else clampView();
+    drawOverlay();
   }, { passive: false });
-  wrap.addEventListener('dblclick', () => resetView());
+  wrap.addEventListener('dblclick', () => { resetView(); drawOverlay(); });
 }
 
 // ============================================================ hover probe
@@ -1047,6 +1062,41 @@ function drawOverlay() {
   ctx.fill();
   ctx.font = `${11 * (window.devicePixelRatio || 1)}px ui-monospace`;
   ctx.fillText(`V at ${state.alphaDeg.toFixed(1)} deg`, cx - 4, cy - 12 * (window.devicePixelRatio || 1));
+  drawBodyOutline(ctx, c);
+}
+
+// Vector-drawn body: covers the rasterized (staircase) mask edge with the
+// exact outline polygon, so the surface looks smooth at any grid resolution
+// and matches the Bouzidi/ghost-fluid wall position.
+function drawBodyOutline(ctx, c) {
+  const eng = state.engine;
+  if (!eng || activeEngineKind() === 'theory' || !state.coords) return;
+  const { chord, origin, nx, ny } = eng;
+  const v = state.view;
+  const W = c.width, H = c.height;
+  const polys = Array.isArray(state.coords[0][0]) ? state.coords : [state.coords];
+  const cellPx = W / nx * v.zoom;
+  ctx.save();
+  for (const poly of polys) {
+    ctx.beginPath();
+    poly.forEach(([x, y], i) => {
+      const u = ((origin[0] + x * chord) / nx - v.cx) * v.zoom + 0.5;
+      const w = ((origin[1] + y * chord) / ny - v.cy) * v.zoom + 0.5;
+      const sx = u * W, sy = (1 - w) * H;
+      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    });
+    ctx.closePath();
+    ctx.fillStyle = 'rgb(26, 31, 41)';
+    ctx.fill();
+    // cover the dilated mask halo (~1.25 cells outside the outline)
+    ctx.strokeStyle = 'rgb(26, 31, 41)';
+    ctx.lineWidth = Math.max(1, 2.6 * cellPx);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(150, 170, 200, 0.55)';
+    ctx.lineWidth = Math.max(1, 0.15 * cellPx);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 const renderCPUSoon = debounce(() => {

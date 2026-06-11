@@ -5,6 +5,20 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.12 — 2026-06-10
+- Add: grids up to **3072×1536** (device limits raised at init; graceful
+  fallback if the GPU can't), default now 2048×1024, 768×384 removed.
+- Add: **vector-drawn body** on the overlay canvas (zoom-aware) — the surface
+  looks perfectly smooth at any grid and matches the Bouzidi/ghost-fluid wall.
+- Fix: **low-Mach "dithering"** in the Euler engine. Two causes: HLLC
+  preserves contacts exactly so odd-even pressure-velocity noise is never
+  damped on near-stagnant faces (now blended toward HLL below face Mach 0.3 —
+  no effect at M≥0.3), and the impulsive start seeded the noise (inflow now
+  ramps over ~half a chord, like LBM). M0.4 field: checkerboard gone, Cl
+  0.813 vs 0.819 baseline, spurious Cd 0.0145 → 0.0118; Sod and diamond-M2
+  anchors unchanged. (A Thornber-type jump-centering fix was tried first and
+  *rejected by measurement*: it destabilized forces, σ_Cl 0.33.)
+
 ### v0.1.11 — 2026-06-10
 - Fix: **URL hash silently reset Re to 1e3 on reload** — `toExponential` wrote
   `re=2.0e+5`, URLSearchParams decodes `+` as a space, parseFloat truncated to
