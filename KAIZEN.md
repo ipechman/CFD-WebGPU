@@ -5,6 +5,20 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.17 — 2026-06-11
+- Fix: **choked steep-cone ducts "broke" the simulation** (repro: A_in/A_t=2,
+  A_ex/A_t=3, M0.4 → 27° diffuser half-angle; real nozzles separate above
+  ~15°). The detached jet evacuates wall pockets to the clamp floors and the
+  scrub's freestream injection detonated inside the supersonic jet. Now:
+  non-finite cells freeze their previous state (freestream only if that too
+  is poisoned), duct mode runs a stiffer CFL margin (0.48 vs 0.65), the duct
+  builder warns when a cone exceeds ~18°, and the exit measurement excludes
+  vacuum/backflow cells — reporting "exit plane N% separated - not
+  measurable" (info) instead of a garbage Mach 24 "fail" when the jet
+  detaches. Gentle nozzles still validate (exit M 0.536 vs 0.471 subsonic
+  branch, check; the honest filter no longer counts stagnant wall cells that
+  previously flattered the average).
+
 ### v0.1.16 — 2026-06-11
 - Fix: **C-shaped particle inlet** — particles respawned only on the left
   edge, so at angle of attack the streamlines entering through the windward

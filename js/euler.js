@@ -101,7 +101,9 @@ export class EulerEngine {
   get dtdx() {
     const M = Math.max(this.flow.M, this.mHot || 0);
     const denom = 1.15 * Math.max(M + 1, Math.min(2.2 * M + 1.1, M + 2));
-    return 0.65 / denom;
+    // ducts: confined stagnation/expansion states run hotter than the
+    // freestream-based estimate - take a stiffer CFL margin
+    return (this.isDuct ? 0.48 : 0.65) / denom;
   }
 
   /** Inflow ramp duration: ~half a chord of travel (soft start - the
@@ -128,6 +130,7 @@ export class EulerEngine {
 
   /** coords = closed polygon, list of polygons, or { duct: params }. */
   setGeometry(geom) {
+    this.isDuct = !!(geom && geom.duct);
     if (geom && geom.duct) {
       this.origin = [this.nx / 2, this.ny / 2]; // throat mid-domain
       const xMin = -this.origin[0] / this.chord - 0.2;
