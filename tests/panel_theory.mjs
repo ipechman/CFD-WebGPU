@@ -4,7 +4,7 @@ import { getAirfoil, geomInfo, rasterize, parseDat } from '../js/airfoils.js';
 import { solvePanel } from '../js/panel.js';
 import {
   obliqueShock, pmFunction, pmInverse, diamondShockExpansion, ackeret,
-  frictionDrag, karmanTsien, prandtlGlauert,
+  frictionDrag, karmanTsien, prandtlGlauert, areaRatio, machFromArea, ductQuasi1D,
 } from '../js/theory.js';
 import { COORD_DATA } from '../js/airfoil-data.js';
 
@@ -59,6 +59,16 @@ export function test() {
   const fp = getAirfoil('flatplate');
   const ak = ackeret(fp.coords, 2, 4);
   ck('flat plate Ackeret M2 a4: Cl = 0.1612', Math.abs(ak.cl - 0.1612) < 0.006, ak.cl.toFixed(4));
+
+  // ---- quasi-1D duct relations ----
+  ck('A/A*(M=2) = 1.6875 (isentropic table)', Math.abs(areaRatio(2) - 1.6875) < 0.001, areaRatio(2).toFixed(4));
+  ck('machFromArea roundtrip subsonic', Math.abs(machFromArea(areaRatio(0.4), false) - 0.4) < 1e-3, machFromArea(areaRatio(0.4), false).toFixed(4));
+  ck('machFromArea roundtrip supersonic', Math.abs(machFromArea(1.6875, true) - 2) < 1e-3, machFromArea(1.6875, true).toFixed(4));
+  const dq = ductQuasi1D(1.6, 1.4, 0.5);
+  ck('CD nozzle at M0.5 inflow chokes', dq.choked === true, JSON.stringify({ choked: dq.choked }));
+  ck('choked exit M (supersonic branch) ~ 1.76', Math.abs(dq.mExitSup - machFromArea(1.4, true)) < 1e-6 && dq.mExitSup > 1.7 && dq.mExitSup < 1.8, dq.mExitSup.toFixed(3));
+  const dq2 = ductQuasi1D(1.2, 1.1, 0.2);
+  ck('gentle venturi at M0.2 stays unchoked', dq2.choked === false && dq2.mThroat < 1, `throat M ${dq2.mThroat.toFixed(2)}`);
 
   // ---- friction drag calibration ----
   const fr = frictionDrag(6e6, 0.12);

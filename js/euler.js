@@ -1,6 +1,6 @@
 // WebGPU compressible Euler engine wrapper (inviscid, M 0.3 - 6, shock capturing).
 
-import { rasterize } from './airfoils.js';
+import { rasterize, makeDuct } from './airfoils.js';
 
 const TORQUE_SCALE = 0.01; // must match shader
 
@@ -28,6 +28,7 @@ export class EulerEngine {
     // spend the domain on surface resolution (staircase error drops ~1/N)
     e.chord = e.nx / 5.5;
     e.origin = [1.7 * e.chord, e.ny / 2];
+    e.origin0 = e.origin.slice();
     e.iter = 0;
     e.stepsSinceRead = 0;
     e.fscale = 1000;
@@ -103,26 +104,41 @@ export class EulerEngine {
     return 0.65 / denom;
   }
 
+  /** Inflow ramp duration: ~half a chord of travel (soft start - the
+   *  impulsive start seeds undamped acoustic/checkerboard noise at low M). */
+  get rampSteps() { return Math.round(0.5 * this.stepsPerChord); }
+
   writeUniforms() {
     const a = this.flow.alphaDeg * Math.PI / 180;
     // velocity bound from total enthalpy at the hottest recent Mach (+25%)
     const mEff = Math.max(this.flow.M, this.mHot || 0);
     const vmax = 1.25 * Math.sqrt(mEff * mEff + 2 / 0.4);
+    const ramp = Math.min(1, Math.max(0.05, this.iter / Math.max(this.rampSteps, 1)));
     for (let i = 0; i < 4; i++) {
       const [axis, wm] = this.uniCombos[i];
       const buf = new ArrayBuffer(48);
       new Uint32Array(buf, 0, 4).set([this.nx, this.ny, axis, wm]);
       new Float32Array(buf, 16, 8).set([
-        this.dtdx, 1.4, this.flow.M, a,
+        this.dtdx, 1.4, this.flow.M * ramp, a,
         this.fscale, this.origin[0] + 0.25 * this.chord, this.origin[1], vmax,
       ]);
       this.device.queue.writeBuffer(this.unis[i], 0, buf);
     }
   }
 
-  setGeometry(coords) {
-    this.coords = coords;
-    this.mask = rasterize(coords, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
+  /** coords = closed polygon, list of polygons, or { duct: params }. */
+  setGeometry(geom) {
+    if (geom && geom.duct) {
+      this.origin = [this.nx / 2, this.ny / 2]; // throat mid-domain
+      const xMin = -this.origin[0] / this.chord - 0.2;
+      const xMax = (this.nx - this.origin[0]) / this.chord + 0.2;
+      const yMax = this.ny / 2 / this.chord + 0.2;
+      this.coords = makeDuct(geom.duct, xMin, xMax, yMax);
+    } else {
+      this.origin = this.origin0.slice();
+      this.coords = geom;
+    }
+    this.mask = rasterize(this.coords, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
     this.device.queue.writeBuffer(this.solidBuf, 0, this.mask);
   }
 
@@ -151,6 +167,8 @@ export class EulerEngine {
       const chords = n / this.stepsPerChord;
       this.mHot = Math.max(this.flow.M, this.mHot * Math.pow(0.8, chords));
       this.writeUniforms();
+    } else if (this.iter < this.rampSteps) {
+      this.writeUniforms(); // advance the inflow ramp once per batch
     }
     const enc = this.device.createCommandEncoder();
     const wg = [Math.ceil(this.nx / 16), Math.ceil(this.ny / 16)];
@@ -192,7 +210,7 @@ export class EulerEngine {
     const cl = (Fy * Math.cos(a) - Fx * Math.sin(a)) / (q * this.chord);
     const cd = (Fx * Math.cos(a) + Fy * Math.sin(a)) / (q * this.chord);
     const cm = -Tz / (q * this.chord * this.chord);
-    return { cl, cd, cm, steps, settledRamp: true };
+    return { cl, cd, cm, steps, settledRamp: this.iter >= this.rampSteps };
   }
 
   /** Nondimensional time (chords traveled at U_inf). */

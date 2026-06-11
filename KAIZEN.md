@@ -5,6 +5,76 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.14 — 2026-06-10
+- Fix: **periodic pressure waves from the LBM outflow** (user repro: S1223,
+  M0.12, Re 4e4, α14.5). The outlet copied each cell's own previous
+  populations — acoustically reflective, so every shed vortex fired a wave
+  back upstream at the shedding frequency, contaminating the whole domain
+  (probe row aft of the wing: mean Cp −2.4, σ 1.7, spikes to −8.6). Now an
+  absorbing sponge (last nx/16 columns, density→ambient with velocity kept)
+  plus spatial-extrapolation outflow. Same probe row after: mean +0.07,
+  σ 0.57 — only real vortex cores remain; the case now converges
+  (time-averaged, 31 chords) instead of hitting the cap.
+- The reflections had been *driving* the exaggerated shedding everywhere:
+  the 2412 M0.1 Re2e5 α4 anchor went from Cl 0.99±0.05 (52% high vs A&vD,
+  oscillating) to **0.591 steady-ish (9% low)** — the long-standing LBM
+  lift overshoot was largely outlet feedback.
+- Duct exit measurement plane moved upstream of the sponge.
+
+### v0.1.13 — 2026-06-10
+- Add: **parametric ducts / nozzles / diffusers** (sidebar panel): set
+  A_in/A_throat, A_exit/A_throat and the two cone lengths; the geometry is
+  built as two wall polygons (multi-polygon rasterizer + Bouzidi/ghost-fluid
+  machinery reused as-is). The theory line shows the quasi-1D isentropic
+  prediction (choking, throat/exit Mach, both branches); after convergence the
+  Validation tab compares the measured exit plane — exit Mach (Euler) or the
+  continuity speed ratio (LBM). Measured on the default CD nozzle at M0.5:
+  exit M 0.479 vs 0.471 quasi-1D (subsonic/shocked branch) — 1.8%, pass.
+  New headless checks: A/A*(M=2)=1.6875, area-Mach roundtrips, choking logic.
+
+### v0.1.12 — 2026-06-10
+- Add: grids up to **3072×1536** (device limits raised at init; graceful
+  fallback if the GPU can't), default now 2048×1024, 768×384 removed.
+- Add: **vector-drawn body** on the overlay canvas (zoom-aware) — the surface
+  looks perfectly smooth at any grid and matches the Bouzidi/ghost-fluid wall.
+- Fix: **low-Mach "dithering"** in the Euler engine. Two causes: HLLC
+  preserves contacts exactly so odd-even pressure-velocity noise is never
+  damped on near-stagnant faces (now blended toward HLL below face Mach 0.3 —
+  no effect at M≥0.3), and the impulsive start seeded the noise (inflow now
+  ramps over ~half a chord, like LBM). M0.4 field: checkerboard gone, Cl
+  0.813 vs 0.819 baseline, spurious Cd 0.0145 → 0.0118; Sod and diamond-M2
+  anchors unchanged. (A Thornber-type jump-centering fix was tried first and
+  *rejected by measurement*: it destabilized forces, σ_Cl 0.33.)
+
+### v0.1.11 — 2026-06-10
+- Fix: **URL hash silently reset Re to 1e3 on reload** — `toExponential` wrote
+  `re=2.0e+5`, URLSearchParams decodes `+` as a space, parseFloat truncated to
+  2.0, and the clamp floored it. Hash now written without `+`; old links are
+  parsed tolerantly. (Found because a verification run quietly became Re 10³.)
+- Fix: **shedding flows looked "never converged" with values all over the
+  place**. Three causes: readouts/validation/pin/CSV used the latest
+  *instantaneous* sample (which swings every frame in a limit cycle); the
+  stationarity check compared two 20-sample windows and fired while the limit
+  cycle was still growing (mean drifted 20%+ after "convergence"); and the
+  sparkline showed only the raw oscillation. Now: all consumers use the
+  ~10-chord time-average, readouts state "oscillating (shedding): time-avg
+  ±σ", convergence requires mean AND amplitude agreement across two 10-chord
+  windows, and the sparkline overlays the running mean. Verified: displayed
+  Cl moved 0.720→0.723 over ~85 post-convergence chords (was 0.62↔1.11
+  every second).
+
+### v0.1.10 — 2026-06-10
+- Honesty: re-measured RAE 2822 **at the true Case 6 angle** (α=2.31 corrected,
+  via the new URL hash): Cl 0.668 vs 0.743 — 10.1% low, passes the 15% band.
+  The v0.1.7 "1.3% off Case 6" figure was taken at α2.9 (wrong angle); the
+  changelog, trust notes, and validation row note are corrected.
+- Add: **α-sweep warm starts** — each angle continues from the previous
+  converged field instead of resetting. Measured at M2 (diamond): ~7.5-8
+  chords/point, comparable to cold starts (supersonic transients exit fast);
+  main benefit is LBM (skips the 600-step inflow re-ramp) and the pinned
+  polar matches theory exactly (α2 0.081 vs Ackeret 0.0806, α4 0.163 vs
+  exact 0.1634, α0 symmetric 0.000).
+
 ### v0.1.9 — 2026-06-10
 - Add: **URL state sharing** — the hash tracks airfoil/M/Re/α/engine/grid
   (`#af=rae2822&m=0.73&...`), restored on load; copy the address-bar link to
@@ -28,7 +98,9 @@ Add new entries at the top of the changelog; pull backlog items from the list be
   pressure quadrature (the face flux now carries physical slip terms).
   Measured at the default grid:
   - NACA 2412 M0.5 α4: Cl 0.513 → **0.864** vs 0.849 panel+PG (40% low → 1.8%)
-  - RAE 2822 Case 6: Cl 0.221 → **0.753** vs 0.743 exp (70% low → 1.3%)
+  - RAE 2822 M0.73 α2.9: Cl 0.221 → **0.753** (same-α A/B). *Correction
+    (v0.1.10): at the true Case 6 angle (α=2.31) Cl is 0.668 vs 0.743 exp —
+    10.1% low, passes; the earlier "1.3% off Case 6" read used α2.9.*
   - Diamond M2 α4: Cl **0.163** vs 0.1634 exact (0.2%); wave Cd 0.058 →
     **0.0259** vs 0.0265 exact (120% high → 2.3%)
   - All cases now converge *steady* (was time-averaged/oscillatory); M6 and

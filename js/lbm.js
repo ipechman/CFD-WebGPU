@@ -1,7 +1,7 @@
 // WebGPU D2Q9 Lattice-Boltzmann engine wrapper (viscous, incompressible, M < 0.3).
 // Physics knob is Reynolds number; lattice inflow speed is fixed at 0.1 (Ma_lat ~ 0.17).
 
-import { rasterize, wallLinkFractions } from './airfoils.js';
+import { rasterize, wallLinkFractions, makeDuct } from './airfoils.js';
 
 const U_LAT = 0.1;          // lattice inflow speed
 const RAMP_STEPS = 600;     // inflow ramp-up
@@ -16,6 +16,7 @@ export class LBMEngine {
     e.ntot = e.nx * e.ny;
     e.chord = e.nx / 5.5;
     e.origin = [1.3 * e.chord, e.ny / 2];   // LE position (cells)
+    e.origin0 = e.origin.slice();
     e.iter = 0;
     e.stepsSinceRead = 0;
     e.fscale = 1e6;
@@ -105,12 +106,22 @@ export class LBMEngine {
     this.device.queue.writeBuffer(this.uni, 0, buf);
   }
 
-  setGeometry(coords) {
-    this.coords = coords;
-    const mask = rasterize(coords, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
+  /** coords = closed polygon, list of polygons, or { duct: params }. */
+  setGeometry(geom) {
+    if (geom && geom.duct) {
+      this.origin = [this.nx / 2, this.ny / 2]; // throat mid-domain
+      const xMin = -this.origin[0] / this.chord - 0.2;
+      const xMax = (this.nx - this.origin[0]) / this.chord + 0.2;
+      const yMax = this.ny / 2 / this.chord + 0.2;
+      this.coords = makeDuct(geom.duct, xMin, xMax, yMax);
+    } else {
+      this.origin = this.origin0.slice();
+      this.coords = geom;
+    }
+    const mask = rasterize(this.coords, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
     this.mask = mask;
     this.device.queue.writeBuffer(this.solidBuf, 0, mask);
-    const q = wallLinkFractions(coords, mask, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
+    const q = wallLinkFractions(this.coords, mask, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
     this.device.queue.writeBuffer(this.qBuf, 0, q);
   }
 

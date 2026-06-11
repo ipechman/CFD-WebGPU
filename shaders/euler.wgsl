@@ -92,21 +92,34 @@ fn hllc(L: vec4f, R: vec4f, ax: u32) -> vec4f {
   let sStar = (R.w - L.w + unL * dL - unR * dR) / (dL - dR);
   let EL = L.w / (g - 1.0) + 0.5 * L.x * (L.y * L.y + L.z * L.z);
   let ER = R.w / (g - 1.0) + 0.5 * R.x * (R.y * R.y + R.z * R.z);
+  let UL = vec4f(L.x, L.x * L.y, L.x * L.z, EL);
+  let UR = vec4f(R.x, R.x * R.y, R.x * R.z, ER);
+  var F: vec4f;
   if (sStar >= 0.0) {
     let fac = dL / (sL - sStar);
     let en = EL / L.x + (sStar - unL) * (sStar + L.w / dL);
     var Us = vec4f(fac, 0.0, 0.0, fac * en);
     if (ax == 0u) { Us.y = fac * sStar; Us.z = fac * L.z; }
     else { Us.y = fac * L.y; Us.z = fac * sStar; }
-    return FL + sL * (Us - vec4f(L.x, L.x * L.y, L.x * L.z, EL));
+    F = FL + sL * (Us - UL);
   } else {
     let fac = dR / (sR - sStar);
     let en = ER / R.x + (sStar - unR) * (sStar + R.w / dR);
     var Us = vec4f(fac, 0.0, 0.0, fac * en);
     if (ax == 0u) { Us.y = fac * sStar; Us.z = fac * R.z; }
     else { Us.y = fac * R.y; Us.z = fac * sStar; }
-    return FR + sR * (Us - vec4f(R.x, R.x * R.y, R.x * R.z, ER));
+    F = FR + sR * (Us - UR);
   }
+  // low-Mach damping: HLLC preserves contacts exactly, so odd-even
+  // pressure-velocity noise ("dithering") is never damped on near-stagnant
+  // faces; blend toward the dissipative HLL flux there (no effect M >= 0.3)
+  let mFace = max(abs(unL), abs(unR)) / max(0.5 * (aL + aR), 1e-9);
+  let w = clamp(mFace / 0.3, 0.0, 1.0);
+  if (w < 1.0) {
+    let Fhll = (sR * FL - sL * FR + sL * sR * (UR - UL)) / (sR - sL);
+    F = mix(Fhll, F, w);
+  }
+  return F;
 }
 
 fn minmod(a: vec4f, b: vec4f) -> vec4f {

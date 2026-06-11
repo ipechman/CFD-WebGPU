@@ -5,7 +5,7 @@
 // Transonic reference: RAE 2822 Case 6 (Cook, McDonald & Firmin, AGARD AR-138, 1979).
 // Supersonic: exact shock-expansion (diamond) and Ackeret linear theory.
 
-import { liftSlope, ackeret, diamondShockExpansion, frictionDrag, prandtlGlauert } from './theory.js';
+import { liftSlope, ackeret, diamondShockExpansion, frictionDrag, prandtlGlauert, ductQuasi1D } from './theory.js';
 import { geomInfo } from './airfoils.js';
 
 export const EXP_DATA = {
@@ -60,16 +60,66 @@ export function evaluateCase(ctx, results) {
   const rows = [];
   const { airfoilId, coords, M, Re, alphaDeg, engine } = ctx;
   const { solver, panel, theory } = results;
-  const info = geomInfo(coords);
   const add = (r) => rows.push(r);
 
   const pct = (a, b) => Math.abs(b) > 1e-4 ? Math.abs((a - b) / b) * 100 : Math.abs(a - b) * 100;
   const status = (d, warn, fail) => d <= warn ? 'pass' : d <= fail ? 'warn' : 'fail';
 
+  // ---- duct/nozzle mode: quasi-1D comparison, then done ----
+  if (ctx.duct) {
+    const q = ductQuasi1D(ctx.duct.a1, ctx.duct.a2, Math.max(M, 0.05));
+    const meas = ctx.ductMeas;
+    if (engine === 'euler' && meas && meas.exit) {
+      const ref = q.choked ? q.mExitSup : q.mExit;
+      const dM = pct(meas.exit.M, ref);
+      const dMsub = q.choked ? pct(meas.exit.M, q.mExitSub) : Infinity;
+      const best = Math.min(dM, dMsub);
+      add({
+        name: 'Duct exit Mach vs quasi-1D', computed: meas.exit.M,
+        reference: best === dM ? ref : q.mExitSub,
+        refSource: 'Isentropic area-Mach relation',
+        delta: best, status: status(best, 12, 30),
+        note: q.choked
+          ? `Choked (throat M=1). Branches: supersonic ${q.mExitSup.toFixed(2)} / subsonic ${q.mExitSub.toFixed(2)} - the simulated back pressure picks one; a shock in the divergent section lands between them.`
+          : 'Unchoked duct: subsonic throughout. 2D wall effects vs 1D theory cost a few percent.',
+      });
+    } else if (engine === 'lbm' && meas && meas.exit && meas.inlet) {
+      const ref = ctx.duct.a1 / ctx.duct.a2; // continuity: u_ex/u_in = A_in/A_ex
+      const r = meas.exit.V / Math.max(meas.inlet.V, 1e-6);
+      const d = pct(r, ref);
+      add({
+        name: 'Duct speed ratio vs continuity', computed: r, reference: ref,
+        refSource: 'Incompressible continuity (A_in/A_exit)',
+        delta: d, status: status(d, 12, 30),
+        note: 'Mean speed at exit vs inlet plane; boundary layers on the walls shift it a few percent.',
+      });
+    } else {
+      add({
+        name: 'Duct quasi-1D prediction', computed: NaN,
+        reference: q.choked ? q.mExitSup : q.mExit,
+        refSource: 'Isentropic area-Mach relation', delta: NaN, status: 'info',
+        note: (q.choked ? 'Choked at throat (M=1). ' : `Throat M=${q.mThroat.toFixed(2)}. `) +
+          'Run the LBM/Euler engine to convergence to measure the exit plane.',
+      });
+    }
+    add({
+      name: 'Engine validity', computed: NaN, reference: NaN, delta: NaN, status: 'info', refSource: '',
+      note: engine === 'lbm'
+        ? 'LBM duct: incompressible venturi/diffuser physics; Mach effects are not modeled below M 0.3.'
+        : 'Euler duct: compressible, captures choking and shocks; quasi-1D theory ignores 2D wall curvature effects.',
+    });
+    return rows;
+  }
+
+  const info = geomInfo(coords);
+
   // Reynolds number the solver actually resolves (LBM stability clamp can sit
   // decades below the request); references are judged against this.
   const simRe = (engine === 'lbm' && ctx.effRe) ? ctx.effRe : Re;
   const lowRe = engine === 'lbm' && simRe < 3e4; // largely separated regime
+  const shedNote = ctx.shedding
+    ? ' Flow is shedding (values are time-averages); 2D simulations exaggerate oscillation amplitude and mean lift vs 3D reality.'
+    : '';
 
   // ---- 1. Lift vs thin-airfoil / linearized theory ----
   const slope = liftSlope(M);
@@ -78,7 +128,7 @@ export function evaluateCase(ctx, results) {
     if (solver) {
       const d = pct(solver.cl, clTheory);
       let st = status(d, 12, 25);
-      let note = 'Inviscid attached-flow reference; expect CFD slightly lower (viscous decambering).';
+      let note = 'Inviscid attached-flow reference; expect CFD slightly lower (viscous decambering).' + shedNote;
       if (lowRe) {
         st = 'info';
         note = `At resolved Re~${simRe.toExponential(1)} the flow is largely separated - attached-flow inviscid references do not apply.`;
@@ -113,9 +163,9 @@ export function evaluateCase(ctx, results) {
         // lift is only mildly Re-dependent pre-stall: widen, don't excuse.
         // Beyond ~2 decades it is a different flow regime entirely.
         status: reOff > 2 ? 'info' : reOff > 0.7 ? status(dl, 20, 40) : status(dl, 15, 30),
-        note: reOff > 2
+        note: (reOff > 2
           ? `Different flow regime: lift at Re~${simRe.toExponential(1)} (separated/laminar) is not comparable to Re=${exp.Re.toExponential(0)} data.`
-          : `Experimental polar.${reNote}${reOff > 0.7 ? ' Expect earlier stall and higher Cl scatter at low Re.' : ''}`,
+          : `Experimental polar.${reNote}${reOff > 0.7 ? ' Expect earlier stall and higher Cl scatter at low Re.' : ''}`) + shedNote,
       });
       const dd = pct(solver.cd, cdRef);
       if (reOff > 0.7) {
@@ -208,7 +258,7 @@ export function evaluateCase(ctx, results) {
       add({
         name: 'Cl vs RAE 2822 Case 6', computed: solver.cl, reference: RAE2822_CASE6.cl,
         refSource: RAE2822_CASE6.source, delta: dl, status: status(dl, 15, 30),
-        note: 'Classic transonic benchmark (M=0.725, a=2.31 deg corrected). Euler + staircase boundary: expect ~10-20% high.',
+        note: 'Classic transonic benchmark (M=0.725, a=2.31 deg corrected). Inviscid Euler reads ~10% low here at the default grid (no viscous decambering match).',
       });
     } else {
       add({
@@ -261,7 +311,7 @@ export function trustNote(engine, M, Re, effRe) {
   }
   if (engine === 'euler') {
     if (M < 0.5) return 'Euler (inviscid, ghost-fluid surface): no boundary layer, so no friction drag and no stall. Cl validated within ~2% of panel+PG at M0.5; residual numerical Cd ~0.01-0.02 (use empirical Cd0 for real drag).';
-    if (M < 1.15) return 'Transonic Euler (ghost-fluid surface): shocks and lift validated (~1% on RAE 2822 Case 6 Cl at default grid); wave drag approximate (~2x on that case), expect mild buffet near M~1.';
+    if (M < 1.15) return 'Transonic Euler (ghost-fluid surface): shocks captured; Cl ~10% low on RAE 2822 Case 6 (M0.725, a2.31) at the default grid; wave drag approximate, expect mild buffet near M~1.';
     if (M <= 4) return 'Supersonic Euler: shocks and wave drag well captured; compare with Ackeret/shock-expansion rows above.';
     return 'M>4: calorically perfect gas assumed (no real-gas/chemistry effects -> real stagnation temperatures lower). Treat as qualitative hypersonic.';
   }

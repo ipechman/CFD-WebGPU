@@ -35,18 +35,28 @@ function hllc(L, R) { // axis 0
   const sStar = (R[3] - L[3] + unL * dL - unR * dR) / (dL - dR);
   const EL = L[3] / (G - 1) + 0.5 * L[0] * (L[1] ** 2 + L[2] ** 2);
   const ER = R[3] / (G - 1) + 0.5 * R[0] * (R[1] ** 2 + R[2] ** 2);
+  const UL = [L[0], L[0] * L[1], L[0] * L[2], EL];
+  const UR = [R[0], R[0] * R[1], R[0] * R[2], ER];
+  let F;
   if (sStar >= 0) {
     const fac = dL / (sL - sStar);
     const en = EL / L[0] + (sStar - unL) * (sStar + L[3] / dL);
     const Us = [fac, fac * sStar, fac * L[2], fac * en];
-    const UL = [L[0], L[0] * L[1], L[0] * L[2], EL];
-    return FL.map((f, i) => f + sL * (Us[i] - UL[i]));
+    F = FL.map((f, i) => f + sL * (Us[i] - UL[i]));
+  } else {
+    const fac = dR / (sR - sStar);
+    const en = ER / R[0] + (sStar - unR) * (sStar + R[3] / dR);
+    const Us = [fac, fac * sStar, fac * R[2], fac * en];
+    F = FR.map((f, i) => f + sR * (Us[i] - UR[i]));
   }
-  const fac = dR / (sR - sStar);
-  const en = ER / R[0] + (sStar - unR) * (sStar + R[3] / dR);
-  const Us = [fac, fac * sStar, fac * R[2], fac * en];
-  const UR = [R[0], R[0] * R[1], R[0] * R[2], ER];
-  return FR.map((f, i) => f + sR * (Us[i] - UR[i]));
+  // low-Mach damping: blend toward HLL on near-stagnant faces (see euler.wgsl)
+  const mFace = Math.max(Math.abs(unL), Math.abs(unR)) / Math.max(0.5 * (aL + aR), 1e-9);
+  const w = Math.min(1, Math.max(0, mFace / 0.3));
+  if (w < 1) {
+    const Fhll = FL.map((f, i) => (sR * f - sL * FR[i] + sL * sR * (UR[i] - UL[i])) / (sR - sL));
+    F = F.map((f, i) => Fhll[i] + w * (f - Fhll[i]));
+  }
+  return F;
 }
 const mm = (a, b) => (Math.sign(a) !== Math.sign(b)) ? 0 : Math.sign(a) * Math.min(Math.abs(a), Math.abs(b));
 function minmod(A, B) { return A.map((a, i) => mm(a, B[i])); }
