@@ -5,6 +5,18 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.16 — 2026-06-11
+- Fix: **C-shaped particle inlet** — particles respawned only on the left
+  edge, so at angle of attack the streamlines entering through the windward
+  (bottom/top) boundary carried no particles and "flow only came from the
+  left". Respawns now split between the left and windward edges in proportion
+  to the inflow flux per edge. (The physics boundaries already admitted flow
+  on all sides; this was visualization-only.)
+- Fix: **oversized ducts** — the throat half-height was fixed at 0.5c, so
+  area ratios near 4 wanted ±2-chord sections in a ±1.4-chord domain. The
+  throat now auto-shrinks so the widest section fits with margin; area
+  *ratios* (the physics) are unchanged.
+
 ### v0.1.15 — 2026-06-11
 - Fix: the remaining "dithering" on both engines was the **tracer particles**
   — 16k bright semi-transparent dots reading as field noise over the (now

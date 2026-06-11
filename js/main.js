@@ -185,6 +185,7 @@ function loop(now) {
       minf: Math.max(state.M, 0.05),
       partSpeed: Math.min(3, Math.max(0.8, 0.3 * state.speed)),
       view: state.view,
+      alphaDeg: state.duct ? 0 : state.alphaDeg,
     });
     frames++;
     if (now - lastFpsT > 1000) { fps = frames; frames = 0; lastFpsT = now; }
