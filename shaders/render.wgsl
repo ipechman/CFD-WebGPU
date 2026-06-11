@@ -141,7 +141,7 @@ struct PartParams {
   vcx: f32,     // view center / zoom (match ViewParams)
   vcy: f32,
   vzoom: f32,
-  pad0: f32,
+  sideFrac: f32, // fraction of respawns on the bottom (+) / top (-) edge
 };
 
 @group(0) @binding(0) var<uniform> PP: PartParams;
@@ -193,7 +193,16 @@ fn advect(@builtin(global_invocation_id) gid: vec3u) {
   if (h.x < 0.002) { dead = true; }
   if (dead) {
     let r = hash2(i * 2654435761u + PP.seed * 668265263u);
-    p = vec2f(r.x * 3.0, 1.0 + r.y * (PP.ny - 2.0));
+    let r2 = hash2(i * 374761393u + PP.seed * 2246822519u);
+    // C-shaped inlet: at angle of attack the freestream also enters through
+    // the bottom (alpha > 0) or top (alpha < 0) boundary, not just the left
+    if (r2.x < abs(PP.sideFrac)) {
+      let x = r.x * PP.nx * 0.85;
+      if (PP.sideFrac > 0.0) { p = vec2f(x, 1.0 + r.y * 3.0); }
+      else { p = vec2f(x, PP.ny - 2.0 - r.y * 3.0); }
+    } else {
+      p = vec2f(r.x * 3.0, 1.0 + r.y * (PP.ny - 2.0));
+    }
   }
   parts[i] = p;
 }

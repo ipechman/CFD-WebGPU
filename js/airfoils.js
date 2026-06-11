@@ -264,11 +264,11 @@ export function rasterize(coords, nx, ny, chordPx, ox, oy) {
 /**
  * Parametric duct (nozzle/diffuser): two wall slabs as closed polygons in
  * chord units, throat at x = 0 on the centerline. a1 = A_inlet/A_throat,
- * a2 = A_exit/A_throat, l1/l2 = converging/diverging cone lengths (chords).
+ * a2 = A_exit/A_throat, l1/l2 = converging/diverging cone lengths (chords);
+ * ht = throat half-height (callers shrink it so wide sections fit the grid).
  * Walls run flat from xMin to the cones and on to xMax (domain extents).
  */
-export function makeDuct({ a1, a2, l1, l2 }, xMin, xMax, yMax) {
-  const ht = 0.5; // throat half-height (chord units)
+export function makeDuct({ a1, a2, l1, l2 }, xMin, xMax, yMax, ht = 0.5) {
   const h1 = a1 * ht, h2 = a2 * ht;
   const wall = [[xMin, h1], [-l1, h1], [0, ht], [l2, h2], [xMax, h2]];
   const close = (p) => { p.push([p[0][0], p[0][1]]); return p; };

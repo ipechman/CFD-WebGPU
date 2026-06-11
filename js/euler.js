@@ -132,8 +132,11 @@ export class EulerEngine {
       this.origin = [this.nx / 2, this.ny / 2]; // throat mid-domain
       const xMin = -this.origin[0] / this.chord - 0.2;
       const xMax = (this.nx - this.origin[0]) / this.chord + 0.2;
-      const yMax = this.ny / 2 / this.chord + 0.2;
-      this.coords = makeDuct(geom.duct, xMin, xMax, yMax);
+      const half = this.ny / 2 / this.chord;
+      const yMax = half + 0.2;
+      // shrink the throat so the widest section stays inside the domain
+      const ht = Math.min(0.5, (half - 0.15) / Math.max(geom.duct.a1, geom.duct.a2));
+      this.coords = makeDuct(geom.duct, xMin, xMax, yMax, ht);
     } else {
       this.origin = this.origin0.slice();
       this.coords = geom;

@@ -157,7 +157,13 @@ export class Renderer {
     new Uint32Array(pbuf, 8, 2).set([N_PARTICLES, this.frame]);
     const pxClipX = 2 / this.canvas.width * 1.25 * (window.devicePixelRatio || 1);
     const pxClipY = 2 / this.canvas.height * 1.25 * (window.devicePixelRatio || 1);
-    new Float32Array(pbuf, 16, 8).set([partSpeed || 1.5, 1.6, pxClipX, pxClipY, zv.cx, zv.cy, zv.zoom, 0]);
+    // C-shaped particle inlet: split respawns between the left edge and the
+    // windward (bottom/top) edge in proportion to the inflow flux per edge
+    const aRad = (opts.alphaDeg || 0) * Math.PI / 180;
+    const sideFlux = Math.abs(Math.sin(aRad)) * engine.nx;
+    const leftFlux = Math.max(Math.cos(aRad), 0.1) * engine.ny;
+    const sideFrac = Math.sign(aRad) * sideFlux / (sideFlux + leftFlux);
+    new Float32Array(pbuf, 16, 8).set([partSpeed || 1.5, 1.6, pxClipX, pxClipY, zv.cx, zv.cy, zv.zoom, sideFrac]);
     dev.queue.writeBuffer(this.partUni, 0, pbuf);
 
     const enc = dev.createCommandEncoder();
