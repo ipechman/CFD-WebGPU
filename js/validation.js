@@ -69,7 +69,14 @@ export function evaluateCase(ctx, results) {
   if (ctx.duct) {
     const q = ductQuasi1D(ctx.duct.a1, ctx.duct.a2, Math.max(M, 0.05));
     const meas = ctx.ductMeas;
-    if (engine === 'euler' && meas && meas.exit) {
+    if (engine === 'euler' && meas && meas.exit && meas.exit.voidFrac > 0.4) {
+      add({
+        name: 'Duct exit Mach vs quasi-1D', computed: NaN,
+        reference: q.choked ? q.mExitSup : q.mExit,
+        refSource: 'Isentropic area-Mach relation', delta: NaN, status: 'info',
+        note: `Exit plane is ${(meas.exit.voidFrac * 100).toFixed(0)}% separated/evacuated (steep cones detach the jet) - exit Mach is not measurable. Lengthen the cones (half-angle below ~15 deg) for a clean comparison.`,
+      });
+    } else if (engine === 'euler' && meas && meas.exit) {
       const ref = q.choked ? q.mExitSup : q.mExit;
       const dM = pct(meas.exit.M, ref);
       const dMsub = q.choked ? pct(meas.exit.M, q.mExitSub) : Infinity;

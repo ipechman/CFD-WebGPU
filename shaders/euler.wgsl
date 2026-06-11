@@ -264,9 +264,16 @@ fn sweep(@builtin(global_invocation_id) gid: vec3u) {
 
   var U1 = Uin[idx] - P.dtdx * (FR - FL);
   // scrub non-finite cells (extreme transients, e.g. live Mach scrubbing):
-  // one poisoned cell otherwise NaN-floods the whole domain
+  // one poisoned cell otherwise NaN-floods the whole domain. Recover gently
+  // by freezing the previous state - injecting freestream inside a confined
+  // supersonic jet (ducts) detonates locally; freestream only if that too
+  // is poisoned.
   let ok = abs(U1.x) < BIG && abs(U1.y) < BIG && abs(U1.z) < BIG && abs(U1.w) < BIG;
-  if (!ok) { U1 = cons(freestream()); }
+  if (!ok) {
+    U1 = Uin[idx];
+    let okp = abs(U1.x) < BIG && abs(U1.y) < BIG && abs(U1.z) < BIG && abs(U1.w) < BIG;
+    if (!okp) { U1 = cons(freestream()); }
+  }
   U1 = cons(prim(U1)); // positivity clamp
   Uout[idx] = U1;
 

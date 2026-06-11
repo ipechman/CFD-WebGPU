@@ -256,17 +256,23 @@ async function sampleDuct() {
   const { nx, ny, mask } = eng;
   const M0 = Math.max(state.M, 0.05);
   const colAvg = (i) => {
-    let n = 0, u = 0, V = 0, Ml = 0;
+    let n = 0, u = 0, V = 0, Ml = 0, cells = 0, voids = 0;
     for (let j = 1; j < ny - 1; j++) {
       const idx = j * nx + i;
       if (mask[idx]) continue;
+      cells++;
       const ux = macro[idx * 4], uy = macro[idx * 4 + 1], rho = macro[idx * 4 + 2], cp = macro[idx * 4 + 3];
-      const sp = Math.hypot(ux, uy);
       const pr = 1 + 0.7 * M0 * M0 * cp;
-      Ml += sp * M0 / Math.sqrt(Math.max(pr, 1e-4) / Math.max(rho, 1e-4));
+      // separated steep-cone jets evacuate wall pockets to the clamp floors;
+      // those cells (and backflow) carry no through-flow - measure the jet
+      if (!(rho > 0.02) || pr < 0.05 || ux <= 0) { voids++; continue; }
+      const sp = Math.hypot(ux, uy);
+      // area-average over through-flow cells: quasi-1D theory is an area
+      // average, and flux weighting overweights the jet core
+      Ml += sp * M0 / Math.sqrt(pr / rho);
       u += ux; V += sp; n++;
     }
-    return n ? { u: u / n, V: V / n, M: Ml / n, n } : null;
+    return n > 0 ? { u: u / n, V: V / n, M: Ml / n, n, voidFrac: cells ? voids / cells : 1 } : null;
   };
   // exit plane sits upstream of the LBM outlet sponge (last nx/16 columns)
   state.ductMeas = { inlet: colAvg(4), exit: colAvg(nx - Math.round(nx / 16) - 4) };
@@ -451,7 +457,15 @@ function applyDuct() {
   }
   computeTheoryDebounced();
   drawOverlay();
-  setStatus(`Duct built: A_in/A_t=${state.duct.a1.toFixed(2)}, A_ex/A_t=${state.duct.a2.toFixed(2)}. Quasi-1D prediction in the theory line; converge to validate.`);
+  // cone half-angles at the engine's auto-fitted throat height
+  const half = state.engine ? state.engine.ny / 2 / state.engine.chord : 1.37;
+  const ht = Math.min(0.5, (half - 0.15) / Math.max(state.duct.a1, state.duct.a2));
+  const deg1 = Math.atan2((state.duct.a1 - 1) * ht, state.duct.l1) * 180 / Math.PI;
+  const deg2 = Math.atan2((state.duct.a2 - 1) * ht, state.duct.l2) * 180 / Math.PI;
+  const steep = Math.max(deg1, deg2) > 18
+    ? ` WARNING: cone half-angle ${Math.max(deg1, deg2).toFixed(0)} deg - real flow separates above ~15 deg; expect an unsteady detached jet (lengthen the cones for clean comparisons).`
+    : '';
+  setStatus(`Duct built: A_in/A_t=${state.duct.a1.toFixed(2)}, A_ex/A_t=${state.duct.a2.toFixed(2)}, cones ${deg1.toFixed(0)}/${deg2.toFixed(0)} deg.${steep} Quasi-1D prediction in the theory line.`);
 }
 
 async function applyCustom() {
