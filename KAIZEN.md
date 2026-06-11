@@ -5,6 +5,23 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.18 — 2026-06-11
+- Fix: **Euler inflow ramp froze mid-way under big ⏩ batches** (user repro:
+  M0.4, NACA 2412, α3.4, ultra grid — "dithering still present"). step()
+  refreshed uniforms only while iter < rampSteps using the start-of-batch
+  count; with fast-forward batches comparable to the ramp length the last
+  write landed at ramp 0.5 and the field ran at **half Mach forever**: Cl
+  read 4× low (0.17 vs ~0.71) and the Cp display divided by the ramped q,
+  amplifying noise 4× — the persistent "dithering". The ramp now writes with
+  the end-of-batch count. Ultra case after: Cl 0.711 vs ~0.71 panel+PG.
+- Fix: **"steady" convergence could fire during slow low-noise transients**
+  (scatter-only test); it now also requires two consecutive 20-sample window
+  means to agree within 1%.
+- Add: **anti-aliased field rendering** — fine grids are minified 4-5 texels
+  per screen pixel and bilinear sampling turns cell-scale detail into
+  speckle; the renderer box-averages 4 taps across the pixel footprint when
+  minified (no effect when zoomed in).
+
 ### v0.1.17 — 2026-06-11
 - Fix: **choked steep-cone ducts "broke" the simulation** (repro: A_in/A_t=2,
   A_ex/A_t=3, M0.4 → 27° diffuser half-angle; real nozzles separate above
