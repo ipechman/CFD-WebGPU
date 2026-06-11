@@ -2,7 +2,7 @@
 
 import { PRESETS, getAirfoil, parseDat, geomInfo, nearestSurfacePoint } from './airfoils.js';
 import { solvePanel, liftCurve } from './panel.js';
-import { quickEstimate, ackeret, karmanTsien, prandtlGlauert, frictionDrag } from './theory.js';
+import { quickEstimate, ackeret, karmanTsien, prandtlGlauert, frictionDrag, ductQuasi1D } from './theory.js';
 import { LBMEngine } from './lbm.js';
 import { EulerEngine } from './euler.js';
 import { Renderer, FIELDS, drawColorbar } from './viz.js';
@@ -21,6 +21,7 @@ const state = {
   running: false, speed: 6, busy: false, sweepCancel: false,
   history: [], pinned: [], converged: false, lastForces: null,
   panelRes: null, theoryRes: null, cpSample: null, polarCache: null, cpuEv: null,
+  duct: null, ductMeas: null,
   device: null, engine: null, renderer: null, shaders: {},
 };
 
@@ -239,8 +240,36 @@ function checkConvergence() {
     const f = meanRecentForces();
     setStatus(`Converged (${state.convergedKind}): Cl=${f.cl.toFixed(3)}${f.sd > 0.01 ? ` ±${f.sd.toFixed(3)}` : ''}. Validation updated.`);
     refreshValidation();
-    if (!state.busy) sampleCp(false).catch(() => {}); // auto-refresh surface pressure plot
+    if (!state.busy) {
+      if (state.duct) sampleDuct().catch(() => {});
+      else sampleCp(false).catch(() => {}); // auto-refresh surface pressure plot
+    }
   }
+}
+
+/** Measure inlet/exit plane averages for duct mode (speed, local Mach). */
+async function sampleDuct() {
+  const eng = state.engine;
+  if (!eng || !state.duct || !state.renderer) return;
+  const macro = await readMacroQueued();
+  const { nx, ny, mask } = eng;
+  const M0 = Math.max(state.M, 0.05);
+  const colAvg = (i) => {
+    let n = 0, u = 0, V = 0, Ml = 0;
+    for (let j = 1; j < ny - 1; j++) {
+      const idx = j * nx + i;
+      if (mask[idx]) continue;
+      const ux = macro[idx * 4], uy = macro[idx * 4 + 1], rho = macro[idx * 4 + 2], cp = macro[idx * 4 + 3];
+      const sp = Math.hypot(ux, uy);
+      const pr = 1 + 0.7 * M0 * M0 * cp;
+      Ml += sp * M0 / Math.sqrt(Math.max(pr, 1e-4) / Math.max(rho, 1e-4));
+      u += ux; V += sp; n++;
+    }
+    return n ? { u: u / n, V: V / n, M: Ml / n, n } : null;
+  };
+  state.ductMeas = { inlet: colAvg(4), exit: colAvg(nx - 5) };
+  updateResultsDisplay();
+  refreshValidation();
 }
 
 // ============================================================ UI binding
@@ -250,6 +279,7 @@ function bindUI() {
   $('naca-apply').addEventListener('click', applyNaca);
   $('naca-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyNaca(); });
   $('custom-apply').addEventListener('click', applyCustom);
+  $('duct-apply').addEventListener('click', applyDuct);
 
   bindSlider('mach-slider', 'mach-val', (v) => v.toFixed(2), (v) => {
     state.M = v; onFlowChange();
@@ -294,7 +324,10 @@ function bindUI() {
   });
   $('btn-csv').addEventListener('click', doExport);
   $('btn-sample-cp').addEventListener('click', () => sampleCp().catch(console.error));
-  $('btn-revalidate').addEventListener('click', refreshValidation);
+  $('btn-revalidate').addEventListener('click', () => {
+    if (state.duct && state.engine) sampleDuct().catch(() => {});
+    refreshValidation();
+  });
 
   const wrap = $('canvas-wrap');
   new ResizeObserver(() => resizeCanvases()).observe(wrap);
@@ -354,6 +387,8 @@ function populateAirfoils() {
 
 function setAirfoilLocal(id, coordsOverride = null, nameOverride = '') {
   try {
+    state.duct = null;
+    state.ductMeas = null;
     const af = coordsOverride ? { name: nameOverride || 'Custom', coords: coordsOverride } : getAirfoil(id);
     state.airfoilId = coordsOverride ? '__custom' : id;
     state.coords = af.coords;
@@ -393,6 +428,30 @@ function applyNaca() {
   } catch (e) { setStatus(e.message); }
 }
 
+function applyDuct() {
+  const get = (id, lo, hi) => Math.min(hi, Math.max(lo, parseFloat($(id).value) || lo));
+  state.duct = {
+    a1: get('duct-a1', 1.05, 4), a2: get('duct-a2', 1.05, 4),
+    l1: get('duct-l1', 0.3, 3), l2: get('duct-l2', 0.3, 3),
+  };
+  state.ductMeas = null;
+  state.airfoilId = '__duct';
+  state.coords = { duct: state.duct };
+  state.airfoilName = `Duct ${state.duct.a1.toFixed(1)}:1:${state.duct.a2.toFixed(1)}`;
+  state.polarCache = null;
+  state.cpSample = null;
+  drawPreview();
+  if (state.engine) {
+    state.engine.setGeometry(state.coords);
+    state.engine.reset();
+    state.renderer.attach(state.engine);
+    resetRun();
+  }
+  computeTheoryDebounced();
+  drawOverlay();
+  setStatus(`Duct built: A_in/A_t=${state.duct.a1.toFixed(2)}, A_ex/A_t=${state.duct.a2.toFixed(2)}. Quasi-1D prediction in the theory line; converge to validate.`);
+}
+
 async function applyCustom() {
   let text = $('custom-dat').value;
   const file = $('custom-file').files[0];
@@ -413,6 +472,25 @@ function drawPreview() {
   ctx.scale(dpr, dpr);
   const W = c.clientWidth, H = c.clientHeight;
   ctx.clearRect(0, 0, W, H);
+  if (state.duct) {
+    // duct cross-section sketch
+    const d = state.duct, span = d.l1 + d.l2 + 1;
+    const X = (x) => 8 + (x + d.l1 + 0.5) / span * (W - 16);
+    const hmax = Math.max(d.a1, d.a2) * 0.5;
+    const Y = (y) => H / 2 - y / (hmax * 1.15) * (H / 2 - 6);
+    ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 1.5;
+    for (const sgn of [1, -1]) {
+      ctx.beginPath();
+      ctx.moveTo(X(-d.l1 - 0.5), Y(sgn * d.a1 * 0.5));
+      ctx.lineTo(X(-d.l1), Y(sgn * d.a1 * 0.5));
+      ctx.lineTo(X(0), Y(sgn * 0.5));
+      ctx.lineTo(X(d.l2), Y(sgn * d.a2 * 0.5));
+      ctx.lineTo(X(d.l2 + 0.5), Y(sgn * d.a2 * 0.5));
+      ctx.stroke();
+    }
+    $('foil-info').textContent = `${state.airfoilName} - cones ${d.l1.toFixed(1)}c / ${d.l2.toFixed(1)}c`;
+    return;
+  }
   const pad = 12, sc = W - 2 * pad;
   ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -435,6 +513,14 @@ function drawPreview() {
 const computeTheoryDebounced = debounce(computeTheory, 130);
 
 function computeTheory() {
+  if (state.duct) {
+    state.panelRes = null;
+    state.theoryRes = ductQuasi1D(state.duct.a1, state.duct.a2, Math.max(state.M, 0.05));
+    renderTheoryBlock();
+    updateResultsDisplay();
+    refreshValidation();
+    return;
+  }
   try {
     state.panelRes = solvePanel(state.coords, state.alphaDeg, 60);
   } catch (e) { state.panelRes = null; console.error(e); }
@@ -456,6 +542,14 @@ function renderTheoryBlock() {
   const t = state.theoryRes;
   const el = $('theory-out');
   if (!t) { el.innerHTML = ''; return; }
+  if (t.duct) {
+    el.innerHTML = `<b>Quasi-1D duct</b> (isentropic, inflow M ${Math.max(state.M, 0.05).toFixed(2)}): ` +
+      (t.choked
+        ? `<b>choked</b> - throat M 1.00, exit M <span class="t-num">${t.mExitSup.toFixed(2)}</span> (supersonic branch) / ` +
+          `<span class="t-num">${t.mExitSub.toFixed(2)}</span> (subsonic branch, high back pressure)`
+        : `throat M <span class="t-num">${t.mThroat.toFixed(2)}</span>, exit M <span class="t-num">${t.mExit.toFixed(2)}</span> (unchoked)`);
+    return;
+  }
   if (!t.valid) {
     el.innerHTML = `<b>Instant estimate</b> - ${t.note || 'not available in this regime'}`;
     return;
@@ -473,6 +567,17 @@ function updateResultsDisplay() {
   const kind = activeEngineKind();
   let src = '';
   let r = null;
+  if (state.duct) {
+    const m = state.ductMeas;
+    src = 'Duct mode: Cl/Cd are not meaningful - quasi-1D prediction above, exit measurement in Validation.' +
+      (m && m.exit ? ` Measured exit M ${m.exit.M.toFixed(2)}, speed ratio ${ (m.exit.V / Math.max(m.inlet ? m.inlet.V : 1e-6, 1e-6)).toFixed(2)}.` : '');
+    $('out-cl').textContent = '-';
+    $('out-cd').textContent = '-';
+    $('out-cm').textContent = '-';
+    $('out-ld').textContent = '-';
+    $('out-source').textContent = src;
+    return;
+  }
   if (kind === 'theory') {
     if (state.theoryRes && state.theoryRes.valid) {
       r = state.theoryRes;
@@ -531,6 +636,7 @@ function updateCpChart() {
 }
 
 function theoryPolar() {
+  if (state.duct) return null;
   const key = `${state.airfoilId}|${state.M.toFixed(2)}`;
   if (state.polarCache && state.polarCache.key === key) return state.polarCache.data;
   const alphas = [];
@@ -565,6 +671,7 @@ function updatePolarChart() {
 
 function updateDragChart() {
   const series = [];
+  if (state.duct) { plot($('drag-canvas'), { series, xlabel: 'Cd', ylabel: 'Cl' }); return; }
   const exp = EXP_DATA[state.airfoilId];
   if (exp && state.M < 0.4) {
     series.push({ x: exp.cd, y: exp.cl, label: 'wind tunnel', color: '#9aa3b2', type: 'scatter', r: 3 });
@@ -644,6 +751,7 @@ function readMacroQueued() {
 
 async function sampleCp(manual = true) {
   const eng = state.engine;
+  if (state.duct) { if (manual) setStatus('Cp sampling is for airfoils; duct mode reports the exit plane in Validation.'); return; }
   if (!eng || !state.renderer) { if (manual) setStatus('Cp sampling needs a running LBM/Euler engine.'); return; }
   if (manual) setStatus('Sampling surface pressure...');
   const macro = await readMacroQueued();
@@ -705,7 +813,7 @@ function applyHashState() {
 }
 
 const updateHash = debounce(() => {
-  if (state.airfoilId === '__custom') return; // pasted coords aren't encodable
+  if (state.airfoilId === '__custom' || state.airfoilId === '__duct') return; // not encodable
   // no '+' in the hash: URLSearchParams would decode it as a space on restore
   const p = `af=${state.airfoilId}&m=${state.M.toFixed(2)}&re=${state.Re.toExponential(1).replace('+', '')}` +
     `&a=${state.alphaDeg.toFixed(1)}&eng=${state.engineSel}&res=${state.res[0]}x${state.res[1]}`;
@@ -885,6 +993,7 @@ function meanRecentForces(n = 40) {
 async function alphaSweep() {
   const eng = state.engine;
   if (!eng) { setStatus('Sweep needs the LBM or Euler engine.'); return; }
+  if (state.duct) { setStatus('The alpha sweep is for airfoils - duct mode has no polar.'); return; }
   state.busy = true;
   state.sweepCancel = false;
   $('btn-sweep').textContent = 'cancel sweep';
@@ -965,6 +1074,7 @@ function refreshValidation() {
         effRe: (kind === 'lbm' && state.engine) ? state.engine.effectiveRe : null,
         chordCells: state.engine ? state.engine.chord : null,
         shedding: state.convergedKind === 'time-averaged',
+        duct: state.duct, ductMeas: state.ductMeas,
       },
       { solver, panel: state.panelRes, theory: state.theoryRes });
   } catch (e) { console.error(e); }
@@ -1070,11 +1180,11 @@ function drawOverlay() {
 // and matches the Bouzidi/ghost-fluid wall position.
 function drawBodyOutline(ctx, c) {
   const eng = state.engine;
-  if (!eng || activeEngineKind() === 'theory' || !state.coords) return;
+  if (!eng || activeEngineKind() === 'theory' || !eng.coords) return;
   const { chord, origin, nx, ny } = eng;
   const v = state.view;
   const W = c.width, H = c.height;
-  const polys = Array.isArray(state.coords[0][0]) ? state.coords : [state.coords];
+  const polys = Array.isArray(eng.coords[0][0]) ? eng.coords : [eng.coords];
   const cellPx = W / nx * v.zoom;
   ctx.save();
   for (const poly of polys) {

@@ -39,6 +39,18 @@
           <button id="custom-apply" class="btn small">Load</button>
         </div>
       </details>
+      <details id="duct-details">
+        <summary>Duct / nozzle (parametric)</summary>
+        <div class="row">
+          <label class="mini">A<sub>in</sub>/A<sub>throat</sub> <input id="duct-a1" type="number" step="0.1" min="1.05" max="4" value="1.6"></label>
+          <label class="mini">A<sub>exit</sub>/A<sub>throat</sub> <input id="duct-a2" type="number" step="0.1" min="1.05" max="4" value="1.4"></label>
+        </div>
+        <div class="row">
+          <label class="mini">cone L<sub>1</sub> (c) <input id="duct-l1" type="number" step="0.1" min="0.3" max="3" value="1.2"></label>
+          <label class="mini">cone L<sub>2</sub> (c) <input id="duct-l2" type="number" step="0.1" min="0.3" max="3" value="1.6"></label>
+        </div>
+        <div class="row"><button id="duct-apply" class="btn small">Build duct</button></div>
+      </details>
       <canvas id="foil-preview" width="280" height="80"></canvas>
       <div id="foil-info" class="dim"></div>
     </section>
@@ -192,6 +204,8 @@
           <p>Euler uses a <b>ghost-fluid surface with true normals</b>: validated Cl within ~2% (subsonic vs panel+PG, RAE 2822 Case 6, diamond shock-expansion) and supersonic wave drag within a few % on the diamond reference. Residual numerical drag ~0.01-0.02 remains at subsonic/transonic - use the empirical Cd0 for real drag. Cl from LBM: good (~5-15%) for attached flow; trust LBM Cd only at Re &lt; ~3e4 where the boundary layer is resolved. No transition modeling, no real-gas effects.</p>
           <h3>Tips</h3>
           <p>Use <b>&#9193; converge</b> to run a case until forces settle - it stops automatically (cap ~40 chords of travel). The &alpha;-sweep runs each angle to convergence and pins the time-averaged result. <b>Hover</b> the flow field to probe local values (velocity, Cp, Mach, vorticity) and hover any plot for a crosshair readout. <b>Scroll</b> on the flow field to zoom (cursor-centered, LBM/Euler views); <b>double-click</b> to reset. The <b>URL hash</b> tracks airfoil/Mach/Re/&alpha;/engine/grid - copy the address bar link to share a case. Mach &amp; angle changes apply live - watch shocks move. Custom airfoils: paste any UIUC-format .dat file.</p>
+          <h3>Ducts &amp; nozzles</h3>
+          <p>The <b>Duct / nozzle</b> panel (sidebar) builds a parametric converging-diverging channel: set inlet/exit area ratios (relative to the throat) and cone lengths. The theory line shows the quasi-1D isentropic prediction (choking, throat/exit Mach); converge the run and the Validation tab compares the measured exit plane - exit Mach for Euler, the continuity speed ratio for LBM. Use M &lt; 0.3 for venturi/diffuser studies and M &ge; 0.3 for compressible nozzles.</p>
           <h3>Credits</h3>
           <p class="dim">Airfoil coordinates: UIUC Airfoil Coordinates Database (M. Selig). Wind-tunnel data: Abbott &amp; von Doenhoff (1959). RAE 2822: AGARD AR-138. Colormaps: matplotlib (polynomial fits by M. Zucker). Educational tool - not for engineering sign-off.</p>
         </div>

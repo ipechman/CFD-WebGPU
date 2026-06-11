@@ -1,6 +1,6 @@
 // WebGPU compressible Euler engine wrapper (inviscid, M 0.3 - 6, shock capturing).
 
-import { rasterize } from './airfoils.js';
+import { rasterize, makeDuct } from './airfoils.js';
 
 const TORQUE_SCALE = 0.01; // must match shader
 
@@ -28,6 +28,7 @@ export class EulerEngine {
     // spend the domain on surface resolution (staircase error drops ~1/N)
     e.chord = e.nx / 5.5;
     e.origin = [1.7 * e.chord, e.ny / 2];
+    e.origin0 = e.origin.slice();
     e.iter = 0;
     e.stepsSinceRead = 0;
     e.fscale = 1000;
@@ -125,9 +126,19 @@ export class EulerEngine {
     }
   }
 
-  setGeometry(coords) {
-    this.coords = coords;
-    this.mask = rasterize(coords, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
+  /** coords = closed polygon, list of polygons, or { duct: params }. */
+  setGeometry(geom) {
+    if (geom && geom.duct) {
+      this.origin = [this.nx / 2, this.ny / 2]; // throat mid-domain
+      const xMin = -this.origin[0] / this.chord - 0.2;
+      const xMax = (this.nx - this.origin[0]) / this.chord + 0.2;
+      const yMax = this.ny / 2 / this.chord + 0.2;
+      this.coords = makeDuct(geom.duct, xMin, xMax, yMax);
+    } else {
+      this.origin = this.origin0.slice();
+      this.coords = geom;
+    }
+    this.mask = rasterize(this.coords, this.nx, this.ny, this.chord, this.origin[0], this.origin[1]);
     this.device.queue.writeBuffer(this.solidBuf, 0, this.mask);
   }
 

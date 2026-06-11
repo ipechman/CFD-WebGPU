@@ -5,7 +5,7 @@
 // Transonic reference: RAE 2822 Case 6 (Cook, McDonald & Firmin, AGARD AR-138, 1979).
 // Supersonic: exact shock-expansion (diamond) and Ackeret linear theory.
 
-import { liftSlope, ackeret, diamondShockExpansion, frictionDrag, prandtlGlauert } from './theory.js';
+import { liftSlope, ackeret, diamondShockExpansion, frictionDrag, prandtlGlauert, ductQuasi1D } from './theory.js';
 import { geomInfo } from './airfoils.js';
 
 export const EXP_DATA = {
@@ -60,11 +60,58 @@ export function evaluateCase(ctx, results) {
   const rows = [];
   const { airfoilId, coords, M, Re, alphaDeg, engine } = ctx;
   const { solver, panel, theory } = results;
-  const info = geomInfo(coords);
   const add = (r) => rows.push(r);
 
   const pct = (a, b) => Math.abs(b) > 1e-4 ? Math.abs((a - b) / b) * 100 : Math.abs(a - b) * 100;
   const status = (d, warn, fail) => d <= warn ? 'pass' : d <= fail ? 'warn' : 'fail';
+
+  // ---- duct/nozzle mode: quasi-1D comparison, then done ----
+  if (ctx.duct) {
+    const q = ductQuasi1D(ctx.duct.a1, ctx.duct.a2, Math.max(M, 0.05));
+    const meas = ctx.ductMeas;
+    if (engine === 'euler' && meas && meas.exit) {
+      const ref = q.choked ? q.mExitSup : q.mExit;
+      const dM = pct(meas.exit.M, ref);
+      const dMsub = q.choked ? pct(meas.exit.M, q.mExitSub) : Infinity;
+      const best = Math.min(dM, dMsub);
+      add({
+        name: 'Duct exit Mach vs quasi-1D', computed: meas.exit.M,
+        reference: best === dM ? ref : q.mExitSub,
+        refSource: 'Isentropic area-Mach relation',
+        delta: best, status: status(best, 12, 30),
+        note: q.choked
+          ? `Choked (throat M=1). Branches: supersonic ${q.mExitSup.toFixed(2)} / subsonic ${q.mExitSub.toFixed(2)} - the simulated back pressure picks one; a shock in the divergent section lands between them.`
+          : 'Unchoked duct: subsonic throughout. 2D wall effects vs 1D theory cost a few percent.',
+      });
+    } else if (engine === 'lbm' && meas && meas.exit && meas.inlet) {
+      const ref = ctx.duct.a1 / ctx.duct.a2; // continuity: u_ex/u_in = A_in/A_ex
+      const r = meas.exit.V / Math.max(meas.inlet.V, 1e-6);
+      const d = pct(r, ref);
+      add({
+        name: 'Duct speed ratio vs continuity', computed: r, reference: ref,
+        refSource: 'Incompressible continuity (A_in/A_exit)',
+        delta: d, status: status(d, 12, 30),
+        note: 'Mean speed at exit vs inlet plane; boundary layers on the walls shift it a few percent.',
+      });
+    } else {
+      add({
+        name: 'Duct quasi-1D prediction', computed: NaN,
+        reference: q.choked ? q.mExitSup : q.mExit,
+        refSource: 'Isentropic area-Mach relation', delta: NaN, status: 'info',
+        note: (q.choked ? 'Choked at throat (M=1). ' : `Throat M=${q.mThroat.toFixed(2)}. `) +
+          'Run the LBM/Euler engine to convergence to measure the exit plane.',
+      });
+    }
+    add({
+      name: 'Engine validity', computed: NaN, reference: NaN, delta: NaN, status: 'info', refSource: '',
+      note: engine === 'lbm'
+        ? 'LBM duct: incompressible venturi/diffuser physics; Mach effects are not modeled below M 0.3.'
+        : 'Euler duct: compressible, captures choking and shocks; quasi-1D theory ignores 2D wall curvature effects.',
+    });
+    return rows;
+  }
+
+  const info = geomInfo(coords);
 
   // Reynolds number the solver actually resolves (LBM stability clamp can sit
   // decades below the request); references are judged against this.

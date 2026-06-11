@@ -55,6 +55,52 @@ export function ackeret(coords, M, alphaDeg) {
   return { cl, cd, cm, cpU, cpL, valid: true };
 }
 
+// ---------------------------------------------------------------- quasi-1D ducts
+
+/** Isentropic area ratio A/A* for Mach M (quasi-1D duct flow). */
+export function areaRatio(M, g = GAMMA) {
+  const t = (2 / (g + 1)) * (1 + (g - 1) / 2 * M * M);
+  return Math.pow(t, (g + 1) / (2 * (g - 1))) / M;
+}
+
+/** Invert A/A* on the subsonic or supersonic branch (bisection). */
+export function machFromArea(ar, supersonic = false, g = GAMMA) {
+  if (ar <= 1) return 1;
+  let lo = supersonic ? 1 : 1e-4;
+  let hi = supersonic ? 50 : 1;
+  for (let i = 0; i < 80; i++) {
+    const mid = 0.5 * (lo + hi);
+    const f = areaRatio(mid, g) - ar;
+    // A/A* rises with M on the supersonic branch, falls on the subsonic one
+    if ((f > 0) === supersonic) hi = mid; else lo = mid;
+  }
+  return 0.5 * (lo + hi);
+}
+
+/**
+ * Quasi-1D duct/nozzle prediction. a1 = A_in/A_throat, a2 = A_exit/A_throat,
+ * Min = inflow Mach. Returns choking state and throat/exit Mach numbers
+ * (both exit branches when choked; back pressure decides which is realized).
+ */
+export function ductQuasi1D(a1, a2, Min, g = GAMMA) {
+  const m0 = Math.max(Min, 1e-3);
+  const arIn = areaRatio(m0, g);          // A_in / A*
+  const atOverAstar = arIn / a1;
+  if (atOverAstar <= 1) {
+    return {
+      duct: true, choked: true, mThroat: 1,
+      mExitSup: machFromArea(a2, true, g),
+      mExitSub: machFromArea(a2, false, g),
+    };
+  }
+  const sup = m0 >= 1;
+  return {
+    duct: true, choked: false,
+    mThroat: machFromArea(atOverAstar, sup, g),
+    mExit: machFromArea(arIn * a2 / a1, sup, g),
+  };
+}
+
 // ---------------------------------------------------------------- shock relations
 
 /** Prandtl-Meyer function nu(M), radians. */

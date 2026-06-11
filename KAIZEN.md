@@ -5,6 +5,17 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.13 — 2026-06-10
+- Add: **parametric ducts / nozzles / diffusers** (sidebar panel): set
+  A_in/A_throat, A_exit/A_throat and the two cone lengths; the geometry is
+  built as two wall polygons (multi-polygon rasterizer + Bouzidi/ghost-fluid
+  machinery reused as-is). The theory line shows the quasi-1D isentropic
+  prediction (choking, throat/exit Mach, both branches); after convergence the
+  Validation tab compares the measured exit plane — exit Mach (Euler) or the
+  continuity speed ratio (LBM). Measured on the default CD nozzle at M0.5:
+  exit M 0.479 vs 0.471 quasi-1D (subsonic/shocked branch) — 1.8%, pass.
+  New headless checks: A/A*(M=2)=1.6875, area-Mach roundtrips, choking logic.
+
 ### v0.1.12 — 2026-06-10
 - Add: grids up to **3072×1536** (device limits raised at init; graceful
   fallback if the GPU can't), default now 2048×1024, 768×384 removed.

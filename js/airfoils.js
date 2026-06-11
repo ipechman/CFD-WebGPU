@@ -206,34 +206,39 @@ export function resample(coords, n = 70) {
  * Scanline fill + edge dilation (guarantees min ~1.5 cell thickness, closed body).
  */
 export function rasterize(coords, nx, ny, chordPx, ox, oy) {
+  const polysIn = Array.isArray(coords[0][0]) ? coords : [coords]; // single poly or list
   const mask = new Uint32Array(nx * ny);
-  const poly = coords.map(([x, y]) => [ox + x * chordPx, oy + y * chordPx]);
-  const m = poly.length - 1; // closed: last == first
-  // scanline fill
-  for (let j = 0; j < ny; j++) {
-    const yc = j + 0.5, xs = [];
+  const polys = polysIn.map(poly => poly.map(([x, y]) => [ox + x * chordPx, oy + y * chordPx]));
+  const rad = 0.75;
+  const segs = []; // combined outline segments [x1, y1, dx, dy, L2]
+  for (const poly of polys) {
+    const m = poly.length - 1; // closed: last == first
+    // scanline fill (union across polygons)
+    for (let j = 0; j < ny; j++) {
+      const yc = j + 0.5, xs = [];
+      for (let k = 0; k < m; k++) {
+        const [x1, y1] = poly[k], [x2, y2] = poly[k + 1];
+        if ((y1 <= yc) !== (y2 <= yc)) xs.push(x1 + (yc - y1) * (x2 - x1) / (y2 - y1));
+      }
+      xs.sort((a, b) => a - b);
+      for (let p = 0; p + 1 < xs.length; p += 2) {
+        const i0 = Math.max(0, Math.ceil(xs[p] - 0.5)), i1 = Math.min(nx - 1, Math.floor(xs[p + 1] - 0.5));
+        for (let i = i0; i <= i1; i++) mask[j * nx + i] = 1;
+      }
+    }
+    // edge dilation: mark cells whose center is within rad of the outline
     for (let k = 0; k < m; k++) {
       const [x1, y1] = poly[k], [x2, y2] = poly[k + 1];
-      if ((y1 <= yc) !== (y2 <= yc)) xs.push(x1 + (yc - y1) * (x2 - x1) / (y2 - y1));
-    }
-    xs.sort((a, b) => a - b);
-    for (let p = 0; p + 1 < xs.length; p += 2) {
-      const i0 = Math.max(0, Math.ceil(xs[p] - 0.5)), i1 = Math.min(nx - 1, Math.floor(xs[p + 1] - 0.5));
-      for (let i = i0; i <= i1; i++) mask[j * nx + i] = 1;
-    }
-  }
-  // edge dilation: mark cells whose center is within rad of the outline
-  const rad = 0.75;
-  for (let k = 0; k < m; k++) {
-    const [x1, y1] = poly[k], [x2, y2] = poly[k + 1];
-    const i0 = Math.max(0, Math.floor(Math.min(x1, x2) - rad - 1)), i1 = Math.min(nx - 1, Math.ceil(Math.max(x1, x2) + rad + 1));
-    const j0 = Math.max(0, Math.floor(Math.min(y1, y2) - rad - 1)), j1 = Math.min(ny - 1, Math.ceil(Math.max(y1, y2) + rad + 1));
-    const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1e-12;
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      const px = i + 0.5 - x1, py = j + 0.5 - y1;
-      const t = Math.max(0, Math.min(1, (px * dx + py * dy) / L2));
-      const ddx = px - t * dx, ddy = py - t * dy;
-      if (ddx * ddx + ddy * ddy < rad * rad) mask[j * nx + i] = 1;
+      const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1e-12;
+      segs.push([x1, y1, dx, dy, L2]);
+      const i0 = Math.max(0, Math.floor(Math.min(x1, x2) - rad - 1)), i1 = Math.min(nx - 1, Math.ceil(Math.max(x1, x2) + rad + 1));
+      const j0 = Math.max(0, Math.floor(Math.min(y1, y2) - rad - 1)), j1 = Math.min(ny - 1, Math.ceil(Math.max(y1, y2) + rad + 1));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const px = i + 0.5 - x1, py = j + 0.5 - y1;
+        const t = Math.max(0, Math.min(1, (px * dx + py * dy) / L2));
+        const ddx = px - t * dx, ddy = py - t * dy;
+        if (ddx * ddx + ddy * ddy < rad * rad) mask[j * nx + i] = 1;
+      }
     }
   }
   // encode true surface normals into boundary solid cells (any solid cell
@@ -244,9 +249,7 @@ export function rasterize(coords, nx, ny, chordPx, ox, oy) {
     if (mask[idx - 1] && mask[idx + 1] && mask[idx - nx] && mask[idx + nx]) continue;
     const px = i + 0.5, py = j + 0.5;
     let best = Infinity, pnx = 0, pny = 1;
-    for (let k = 0; k < m; k++) {
-      const [x1, y1] = poly[k], [x2, y2] = poly[k + 1];
-      const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1e-12;
+    for (const [x1, y1, dx, dy, L2] of segs) {
       const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / L2));
       const ddx = px - (x1 + t * dx), ddy = py - (y1 + t * dy);
       const d = ddx * ddx + ddy * ddy;
@@ -259,6 +262,22 @@ export function rasterize(coords, nx, ny, chordPx, ox, oy) {
 }
 
 /**
+ * Parametric duct (nozzle/diffuser): two wall slabs as closed polygons in
+ * chord units, throat at x = 0 on the centerline. a1 = A_inlet/A_throat,
+ * a2 = A_exit/A_throat, l1/l2 = converging/diverging cone lengths (chords).
+ * Walls run flat from xMin to the cones and on to xMax (domain extents).
+ */
+export function makeDuct({ a1, a2, l1, l2 }, xMin, xMax, yMax) {
+  const ht = 0.5; // throat half-height (chord units)
+  const h1 = a1 * ht, h2 = a2 * ht;
+  const wall = [[xMin, h1], [-l1, h1], [0, ht], [l2, h2], [xMax, h2]];
+  const close = (p) => { p.push([p[0][0], p[0][1]]); return p; };
+  const upper = close([...wall.map(([x, y]) => [x, y]), [xMax, yMax], [xMin, yMax]]);
+  const lower = close([...wall.map(([x, y]) => [x, -y]), [xMax, -yMax], [xMin, -yMax]]);
+  return [upper, lower];
+}
+
+/**
  * Per-link wall distances for interpolated (Bouzidi) bounce-back.
  * For every fluid cell with a solid neighbor along a D2Q9 direction k=1..8,
  * the fraction q in (0,1] of the link covered before crossing the outline is
@@ -268,8 +287,14 @@ export function rasterize(coords, nx, ny, chordPx, ox, oy) {
  */
 export function wallLinkFractions(coords, mask, nx, ny, chordPx, ox, oy) {
   const E = [[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, 1], [-1, -1], [1, -1]];
-  const poly = coords.map(([x, y]) => [ox + x * chordPx, oy + y * chordPx]);
-  const m = poly.length - 1;
+  const polysIn = Array.isArray(coords[0][0]) ? coords : [coords];
+  const segs = []; // combined outline segments [ax, ay, bx, by] (b = vector)
+  for (const polyIn of polysIn) {
+    const poly = polyIn.map(([x, y]) => [ox + x * chordPx, oy + y * chordPx]);
+    for (let s = 0; s + 1 < poly.length; s++) {
+      segs.push([poly[s][0], poly[s][1], poly[s + 1][0] - poly[s][0], poly[s + 1][1] - poly[s][1]]);
+    }
+  }
   const out = new Uint32Array(nx * ny * 2);
   for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
     const idx = j * nx + i;
@@ -282,9 +307,7 @@ export function wallLinkFractions(coords, mask, nx, ny, chordPx, ox, oy) {
       // intersect the link [center, center + e_k] with the outline
       const px = i + 0.5, py = j + 0.5;
       let tBest = Infinity;
-      for (let s = 0; s < m; s++) {
-        const ax = poly[s][0], ay = poly[s][1];
-        const bx = poly[s + 1][0] - ax, by = poly[s + 1][1] - ay;
+      for (const [ax, ay, bx, by] of segs) {
         const den = ex * by - ey * bx;
         if (Math.abs(den) < 1e-12) continue;
         const qx = ax - px, qy = ay - py;
