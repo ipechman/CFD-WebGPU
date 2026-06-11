@@ -71,30 +71,45 @@ fn colormap(t: f32, id: u32) -> vec3f {
   return clamp(viridis(tc), vec3f(0.0), vec3f(1.0));
 }
 
+// Footprint-aware fetch: with fine grids the field is minified several
+// texels per screen pixel, and plain bilinear sampling aliases - cell-scale
+// detail shows up as speckle/"dithering". Box-average 4 taps when minified.
+fn boxSample(uv: vec2f, ddx: vec2f, ddy: vec2f, minified: bool) -> vec4f {
+  if (!minified) { return textureSampleLevel(macroTex, smp, uv, 0.0); }
+  return 0.25 * (
+    textureSampleLevel(macroTex, smp, uv + 0.3 * ddx + 0.3 * ddy, 0.0) +
+    textureSampleLevel(macroTex, smp, uv - 0.3 * ddx + 0.3 * ddy, 0.0) +
+    textureSampleLevel(macroTex, smp, uv + 0.3 * ddx - 0.3 * ddy, 0.0) +
+    textureSampleLevel(macroTex, smp, uv - 0.3 * ddx - 0.3 * ddy, 0.0));
+}
+
 @fragment
 fn fsField(inp: VSOut) -> @location(0) vec4f {
   // screen uv -> world uv through the zoom view
   let uv = vec2f(V.vcx, V.vcy) + (inp.uv - 0.5) / max(V.vzoom, 1.0);
   let texel = vec2f(1.0 / V.nx, 1.0 / V.ny);
-  let m = textureSampleLevel(macroTex, smp, uv, 0.0);
+  let ddx = dpdx(uv);
+  let ddy = dpdy(uv);
+  let minified = max(abs(ddx.x) * V.nx, abs(ddy.y) * V.ny) > 1.5;
+  let m = boxSample(uv, ddx, ddy, minified);
   var s: f32 = 0.0;
 
   switch V.mode {
     case 0u: { s = length(m.xy); }
     case 1u: { // vorticity (per-cell central difference)
-      let mxp = textureSampleLevel(macroTex, smp, uv + vec2f(texel.x, 0.0), 0.0);
-      let mxm = textureSampleLevel(macroTex, smp, uv - vec2f(texel.x, 0.0), 0.0);
-      let myp = textureSampleLevel(macroTex, smp, uv + vec2f(0.0, texel.y), 0.0);
-      let mym = textureSampleLevel(macroTex, smp, uv - vec2f(0.0, texel.y), 0.0);
+      let mxp = boxSample(uv + vec2f(texel.x, 0.0), ddx, ddy, minified);
+      let mxm = boxSample(uv - vec2f(texel.x, 0.0), ddx, ddy, minified);
+      let myp = boxSample(uv + vec2f(0.0, texel.y), ddx, ddy, minified);
+      let mym = boxSample(uv - vec2f(0.0, texel.y), ddx, ddy, minified);
       s = 0.5 * ((mxp.y - mxm.y) - (myp.x - mym.x));
     }
     case 2u: { s = m.w; }
     case 3u: { s = m.z; }
     case 4u: { // numerical schlieren |grad rho|
-      let mxp = textureSampleLevel(macroTex, smp, uv + vec2f(texel.x, 0.0), 0.0);
-      let mxm = textureSampleLevel(macroTex, smp, uv - vec2f(texel.x, 0.0), 0.0);
-      let myp = textureSampleLevel(macroTex, smp, uv + vec2f(0.0, texel.y), 0.0);
-      let mym = textureSampleLevel(macroTex, smp, uv - vec2f(0.0, texel.y), 0.0);
+      let mxp = boxSample(uv + vec2f(texel.x, 0.0), ddx, ddy, minified);
+      let mxm = boxSample(uv - vec2f(texel.x, 0.0), ddx, ddy, minified);
+      let myp = boxSample(uv + vec2f(0.0, texel.y), ddx, ddy, minified);
+      let mym = boxSample(uv - vec2f(0.0, texel.y), ddx, ddy, minified);
       let g = 0.5 * vec2f(mxp.z - mxm.z, myp.z - mym.z);
       s = length(g);
     }

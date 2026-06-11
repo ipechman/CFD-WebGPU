@@ -222,8 +222,13 @@ function checkConvergence() {
   const w = stats(h.slice(-20));
   const wasConverged = state.converged;
 
-  // steady convergence: tiny scatter
-  const steady = w.sd / Math.max(Math.abs(w.m), 0.05) < 0.012;
+  // steady convergence: tiny scatter AND no mean drift (low-noise slow
+  // transients - e.g. lift building up on fine grids - must not pass)
+  let steady = w.sd / Math.max(Math.abs(w.m), 0.05) < 0.012 && h.length >= 40;
+  if (steady) {
+    const prev = stats(h.slice(-40, -20));
+    steady = Math.abs(prev.m - w.m) / Math.max(Math.abs(w.m), 0.05) < 0.01;
+  }
   // statistical stationarity (shedding etc.): mean AND oscillation amplitude
   // of two consecutive ~10-chord windows must agree. Short 20-sample windows
   // used to fire while the limit cycle was still growing - the mean then

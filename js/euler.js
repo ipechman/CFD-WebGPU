@@ -110,12 +110,12 @@ export class EulerEngine {
    *  impulsive start seeds undamped acoustic/checkerboard noise at low M). */
   get rampSteps() { return Math.round(0.5 * this.stepsPerChord); }
 
-  writeUniforms() {
+  writeUniforms(iterAt = this.iter) {
     const a = this.flow.alphaDeg * Math.PI / 180;
     // velocity bound from total enthalpy at the hottest recent Mach (+25%)
     const mEff = Math.max(this.flow.M, this.mHot || 0);
     const vmax = 1.25 * Math.sqrt(mEff * mEff + 2 / 0.4);
-    const ramp = Math.min(1, Math.max(0.05, this.iter / Math.max(this.rampSteps, 1)));
+    const ramp = Math.min(1, Math.max(0.05, iterAt / Math.max(this.rampSteps, 1)));
     for (let i = 0; i < 4; i++) {
       const [axis, wm] = this.uniCombos[i];
       const buf = new ArrayBuffer(48);
@@ -173,8 +173,12 @@ export class EulerEngine {
       const chords = n / this.stepsPerChord;
       this.mHot = Math.max(this.flow.M, this.mHot * Math.pow(0.8, chords));
       this.writeUniforms();
-    } else if (this.iter < this.rampSteps) {
-      this.writeUniforms(); // advance the inflow ramp once per batch
+    } else if (this.iter <= this.rampSteps) {
+      // advance the inflow ramp using the END-of-batch step count: with big
+      // fast-forward batches the start-of-batch value froze the ramp at 0.5
+      // (the field then ran at half Mach forever - Cl read ~4x low and the
+      // Cp display amplified noise 4x, seen as persistent "dithering")
+      this.writeUniforms(this.iter + n);
     }
     const enc = this.device.createCommandEncoder();
     const wg = [Math.ceil(this.nx / 16), Math.ceil(this.ny / 16)];
