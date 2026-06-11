@@ -5,6 +5,15 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.15 — 2026-06-11
+- Fix: the remaining "dithering" on both engines was the **tracer particles**
+  — 16k bright semi-transparent dots reading as field noise over the (now
+  smooth) fields. Verified by cell-level probes (LBM |ΔV| ~ 3e-4/cell) and
+  particles-off screenshots: both engines' converged fields are clean.
+  Particle alpha 0.35 → 0.16 and size reduced ~20%; uncheck "Particles" for
+  the raw field. Early-run graininess during the inflow ramp is display
+  normalization by the still-small inflow and fades within the first chords.
+
 ### v0.1.14 — 2026-06-10
 - Fix: **periodic pressure waves from the LBM outflow** (user repro: S1223,
   M0.12, Re 4e4, α14.5). The outlet copied each cell's own previous

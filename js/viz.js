@@ -155,8 +155,8 @@ export class Renderer {
     const pbuf = new ArrayBuffer(48);
     new Float32Array(pbuf, 0, 2).set([engine.nx, engine.ny]);
     new Uint32Array(pbuf, 8, 2).set([N_PARTICLES, this.frame]);
-    const pxClipX = 2 / this.canvas.width * 1.6 * (window.devicePixelRatio || 1);
-    const pxClipY = 2 / this.canvas.height * 1.6 * (window.devicePixelRatio || 1);
+    const pxClipX = 2 / this.canvas.width * 1.25 * (window.devicePixelRatio || 1);
+    const pxClipY = 2 / this.canvas.height * 1.25 * (window.devicePixelRatio || 1);
     new Float32Array(pbuf, 16, 8).set([partSpeed || 1.5, 1.6, pxClipX, pxClipY, zv.cx, zv.cy, zv.zoom, 0]);
     dev.queue.writeBuffer(this.partUni, 0, pbuf);
 

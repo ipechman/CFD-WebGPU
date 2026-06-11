@@ -221,5 +221,6 @@ fn vsParticle(@builtin(vertex_index) vi: u32) -> PVSOut {
 fn fsParticle(inp: PVSOut) -> @location(0) vec4f {
   let r2 = dot(inp.q, inp.q);
   if (r2 > 1.0) { discard; }
-  return vec4f(0.95, 0.97, 1.0, 0.35 * (1.0 - r2));
+  // subtle: dense bright dots read as field noise ("dithering") in stills
+  return vec4f(0.95, 0.97, 1.0, 0.16 * (1.0 - r2));
 }
