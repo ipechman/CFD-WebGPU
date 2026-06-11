@@ -5,6 +5,23 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.11 — 2026-06-10
+- Fix: **URL hash silently reset Re to 1e3 on reload** — `toExponential` wrote
+  `re=2.0e+5`, URLSearchParams decodes `+` as a space, parseFloat truncated to
+  2.0, and the clamp floored it. Hash now written without `+`; old links are
+  parsed tolerantly. (Found because a verification run quietly became Re 10³.)
+- Fix: **shedding flows looked "never converged" with values all over the
+  place**. Three causes: readouts/validation/pin/CSV used the latest
+  *instantaneous* sample (which swings every frame in a limit cycle); the
+  stationarity check compared two 20-sample windows and fired while the limit
+  cycle was still growing (mean drifted 20%+ after "convergence"); and the
+  sparkline showed only the raw oscillation. Now: all consumers use the
+  ~10-chord time-average, readouts state "oscillating (shedding): time-avg
+  ±σ", convergence requires mean AND amplitude agreement across two 10-chord
+  windows, and the sparkline overlays the running mean. Verified: displayed
+  Cl moved 0.720→0.723 over ~85 post-convergence chords (was 0.62↔1.11
+  every second).
+
 ### v0.1.10 — 2026-06-10
 - Honesty: re-measured RAE 2822 **at the true Case 6 angle** (α=2.31 corrected,
   via the new URL hash): Cl 0.668 vs 0.743 — 10.1% low, passes the 15% band.

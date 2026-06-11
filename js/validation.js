@@ -70,6 +70,9 @@ export function evaluateCase(ctx, results) {
   // decades below the request); references are judged against this.
   const simRe = (engine === 'lbm' && ctx.effRe) ? ctx.effRe : Re;
   const lowRe = engine === 'lbm' && simRe < 3e4; // largely separated regime
+  const shedNote = ctx.shedding
+    ? ' Flow is shedding (values are time-averages); 2D simulations exaggerate oscillation amplitude and mean lift vs 3D reality.'
+    : '';
 
   // ---- 1. Lift vs thin-airfoil / linearized theory ----
   const slope = liftSlope(M);
@@ -78,7 +81,7 @@ export function evaluateCase(ctx, results) {
     if (solver) {
       const d = pct(solver.cl, clTheory);
       let st = status(d, 12, 25);
-      let note = 'Inviscid attached-flow reference; expect CFD slightly lower (viscous decambering).';
+      let note = 'Inviscid attached-flow reference; expect CFD slightly lower (viscous decambering).' + shedNote;
       if (lowRe) {
         st = 'info';
         note = `At resolved Re~${simRe.toExponential(1)} the flow is largely separated - attached-flow inviscid references do not apply.`;
@@ -113,9 +116,9 @@ export function evaluateCase(ctx, results) {
         // lift is only mildly Re-dependent pre-stall: widen, don't excuse.
         // Beyond ~2 decades it is a different flow regime entirely.
         status: reOff > 2 ? 'info' : reOff > 0.7 ? status(dl, 20, 40) : status(dl, 15, 30),
-        note: reOff > 2
+        note: (reOff > 2
           ? `Different flow regime: lift at Re~${simRe.toExponential(1)} (separated/laminar) is not comparable to Re=${exp.Re.toExponential(0)} data.`
-          : `Experimental polar.${reNote}${reOff > 0.7 ? ' Expect earlier stall and higher Cl scatter at low Re.' : ''}`,
+          : `Experimental polar.${reNote}${reOff > 0.7 ? ' Expect earlier stall and higher Cl scatter at low Re.' : ''}`) + shedNote,
       });
       const dd = pct(solver.cd, cdRef);
       if (reOff > 0.7) {

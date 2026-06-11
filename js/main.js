@@ -199,25 +199,31 @@ async function sampleForces() {
 function checkConvergence() {
   const h = state.history.filter(s => s.settled);
   if (h.length < 20) { state.converged = false; state.convergedKind = null; return; }
-  const w = h.slice(-20);
-  const mean = w.reduce((a, s) => a + s.cl, 0) / w.length;
-  const sd = Math.sqrt(w.reduce((a, s) => a + (s.cl - mean) ** 2, 0) / w.length);
+  const stats = (arr) => {
+    const m = arr.reduce((a, s) => a + s.cl, 0) / arr.length;
+    return { m, sd: Math.sqrt(arr.reduce((a, s) => a + (s.cl - m) ** 2, 0) / arr.length) };
+  };
+  const w = stats(h.slice(-20));
   const wasConverged = state.converged;
 
   // steady convergence: tiny scatter
-  const steady = sd / Math.max(Math.abs(mean), 0.05) < 0.012;
-  // statistical stationarity (unsteady flows, e.g. vortex shedding): the
-  // running mean has stopped drifting even though samples oscillate
+  const steady = w.sd / Math.max(Math.abs(w.m), 0.05) < 0.012;
+  // statistical stationarity (shedding etc.): mean AND oscillation amplitude
+  // of two consecutive ~10-chord windows must agree. Short 20-sample windows
+  // used to fire while the limit cycle was still growing - the mean then
+  // drifted 20%+ after "convergence".
   let stationary = false;
-  if (!steady && h.length >= 40) {
-    const a = h.slice(-40, -20), b = w;
-    const ma = a.reduce((x, s) => x + s.cl, 0) / a.length;
-    stationary = Math.abs(ma - mean) / Math.max(Math.abs(mean), 0.05) < 0.02;
+  if (!steady && h.length >= 80) {
+    const a = stats(h.slice(-80, -40));
+    const b = stats(h.slice(-40));
+    stationary = Math.abs(a.m - b.m) / Math.max(Math.abs(b.m), 0.05) < 0.025 &&
+      Math.abs(a.sd - b.sd) / Math.max(b.sd, 0.01) < 0.3;
   }
   state.converged = steady || stationary;
   state.convergedKind = steady ? 'steady' : stationary ? 'time-averaged' : null;
   if (state.converged && !wasConverged) {
-    setStatus(`Converged (${state.convergedKind}): Cl=${mean.toFixed(3)} (sigma ${sd.toFixed(4)}). Validation updated.`);
+    const f = meanRecentForces();
+    setStatus(`Converged (${state.convergedKind}): Cl=${f.cl.toFixed(3)}${f.sd > 0.01 ? ` ±${f.sd.toFixed(3)}` : ''}. Validation updated.`);
     refreshValidation();
     if (!state.busy) sampleCp(false).catch(() => {}); // auto-refresh surface pressure plot
   }
@@ -459,9 +465,15 @@ function updateResultsDisplay() {
       src = `Theory engine - ${state.theoryRes.regime}`;
     } else { src = 'Theory engine - regime not covered (use Euler)'; }
   } else if (state.lastForces) {
-    r = state.lastForces;
+    // show the ~10-chord time-average: instantaneous samples swing wildly in
+    // shedding flows even after time-averaged convergence
+    const avg = meanRecentForces();
+    r = avg || state.lastForces;
     const conv = state.converged ? ' - converged' : ' - averaging...';
     src = `${kind.toUpperCase()} solver, ${state.engine ? state.engine.iter.toLocaleString() : 0} steps${conv}`;
+    if (avg && avg.sd / Math.max(Math.abs(avg.cl), 0.05) > 0.05) {
+      src += ` | oscillating (shedding): time-avg of last ${avg.n} samples, Cl ±${avg.sd.toFixed(3)}`;
+    }
     if (kind === 'euler') {
       const fr = frictionDrag(state.Re, geomInfo(state.coords).tc, state.M);
       src += ` | inviscid: add Cd0~${fr.cd0.toFixed(4)} friction for total drag`;
@@ -582,9 +594,27 @@ function drawConvSparkline() {
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
+  // running-mean overlay: shows the time-average flattening even while the
+  // raw trace oscillates (shedding flows look like a sine wave forever)
+  if (h.length > 12) {
+    ctx.strokeStyle = '#ffb454';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let i = 9; i < h.length; i++) {
+      let m = 0;
+      for (let j = i - 9; j <= i; j++) m += h[j].cl;
+      m /= 10;
+      const x = i / (h.length - 1) * (c.width - 4) + 2;
+      const y = c.height - 4 - (m - lo) / (hi - lo) * (c.height - 8);
+      if (i === 9) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
   ctx.fillStyle = '#8b95a5';
   ctx.font = '9px ui-monospace';
-  ctx.fillText(state.converged ? 'converged' : 'Cl history', 4, 9);
+  ctx.fillText(state.converged
+    ? (state.convergedKind === 'time-averaged' ? 'converged (time-avg, shedding)' : 'converged')
+    : 'Cl history (mean in orange)', 4, 9);
 }
 
 // ============================================================ Cp sampling
@@ -640,7 +670,9 @@ function applyHashState() {
     }
     const m = parseFloat(p.get('m'));
     if (Number.isFinite(m)) state.M = Math.min(6, Math.max(0, m));
-    const re = parseFloat(p.get('re'));
+    // tolerate '+' in old links: URLSearchParams decodes it to a space,
+    // which would truncate '2.0e+5' to 2.0 and clamp Re to the floor
+    const re = parseFloat((p.get('re') || '').replace(/\s/g, '+'));
     if (Number.isFinite(re)) state.Re = Math.min(1e8, Math.max(1e3, re));
     const a = parseFloat(p.get('a'));
     if (Number.isFinite(a)) state.alphaDeg = Math.min(20, Math.max(-15, a));
@@ -660,7 +692,8 @@ function applyHashState() {
 
 const updateHash = debounce(() => {
   if (state.airfoilId === '__custom') return; // pasted coords aren't encodable
-  const p = `af=${state.airfoilId}&m=${state.M.toFixed(2)}&re=${state.Re.toExponential(1)}` +
+  // no '+' in the hash: URLSearchParams would decode it as a space on restore
+  const p = `af=${state.airfoilId}&m=${state.M.toFixed(2)}&re=${state.Re.toExponential(1).replace('+', '')}` +
     `&a=${state.alphaDeg.toFixed(1)}&eng=${state.engineSel}&res=${state.res[0]}x${state.res[1]}`;
   history.replaceState(null, '', '#' + p);
 }, 400);
@@ -823,12 +856,15 @@ async function runToConvergence(maxChords = 40, internal = false, label = 'Conve
   return hit;
 }
 
-/** Mean of the recent settled force samples (robust for shedding/unsteady cases). */
-function meanRecentForces(n = 20) {
+/** Time-average of the recent settled force samples (~10 chords); the honest
+ *  number for shedding flows where instantaneous samples swing every frame. */
+function meanRecentForces(n = 40) {
   const h = state.history.filter(s => s.settled).slice(-n);
   if (!h.length) return null;
   const avg = (k) => h.reduce((acc, s) => acc + s[k], 0) / h.length;
-  return { cl: avg('cl'), cd: avg('cd'), cm: avg('cm') };
+  const cl = avg('cl');
+  const sd = Math.sqrt(h.reduce((a, s) => a + (s.cl - cl) ** 2, 0) / h.length);
+  return { cl, cd: avg('cd'), cm: avg('cm'), sd, n: h.length };
 }
 
 async function alphaSweep() {
@@ -876,7 +912,7 @@ async function alphaSweep() {
 
 function pinPoint() {
   const kind = activeEngineKind();
-  const r = kind === 'theory' ? state.theoryRes : state.lastForces;
+  const r = kind === 'theory' ? state.theoryRes : (meanRecentForces() || state.lastForces);
   if (!r || !Number.isFinite(r.cl)) { setStatus('No result to pin yet.'); return; }
   state.pinned.push({
     alpha: state.alphaDeg, cl: r.cl, cd: r.cd, cm: r.cm ?? NaN,
@@ -888,7 +924,7 @@ function pinPoint() {
 
 function doExport() {
   const rows = state.pinned.map(p => [state.airfoilName, p.engine, p.M, p.Re, p.alpha, p.cl, p.cd, p.cm]);
-  const r = activeEngineKind() === 'theory' ? state.theoryRes : state.lastForces;
+  const r = activeEngineKind() === 'theory' ? state.theoryRes : (meanRecentForces() || state.lastForces);
   if (r && Number.isFinite(r.cl)) {
     rows.push([state.airfoilName, activeEngineKind() + ' (current)', state.M, state.Re, state.alphaDeg, r.cl, r.cd, r.cm ?? NaN]);
   }
@@ -902,7 +938,9 @@ function refreshValidation() {
   const tbody = document.querySelector('#valid-table tbody');
   if (!tbody) return;
   const kind = activeEngineKind();
-  const solver = (kind !== 'theory' && state.converged && state.lastForces) ? state.lastForces : null;
+  // judge the time-average, not whichever shedding phase we sampled last
+  const solver = (kind !== 'theory' && state.converged && state.lastForces)
+    ? (meanRecentForces() || state.lastForces) : null;
   let rows = [];
   try {
     rows = evaluateCase(
@@ -911,6 +949,7 @@ function refreshValidation() {
         alphaDeg: state.alphaDeg, engine: kind,
         effRe: (kind === 'lbm' && state.engine) ? state.engine.effectiveRe : null,
         chordCells: state.engine ? state.engine.chord : null,
+        shedding: state.convergedKind === 'time-averaged',
       },
       { solver, panel: state.panelRes, theory: state.theoryRes });
   } catch (e) { console.error(e); }
