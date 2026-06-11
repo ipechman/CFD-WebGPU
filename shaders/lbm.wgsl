@@ -88,7 +88,7 @@ fn step_lbm(@builtin(global_invocation_id) gid: vec3u) {
     if (sx < 0 || sy < 0 || sy >= i32(P.ny)) {
       f[k] = feq(k, 1.0, uIn);                 // inflow / far-field equilibrium
     } else if (sx >= i32(P.nx)) {
-      f[k] = fin[k * N + idx];                  // outflow: zero-gradient-ish
+      f[k] = fin[k * N + idx - 1u];             // outflow: spatial extrapolation
     } else {
       let sidx = u32(sy) * P.nx + u32(sx);
       if (solid[sidx] != 0u) {
@@ -165,8 +165,16 @@ fn step_lbm(@builtin(global_invocation_id) gid: vec3u) {
     // inlet: impose equilibrium at freestream
     for (var k = 0u; k < 9u; k++) { fout[k * N + idx] = feq(k, 1.0, uIn); }
   } else {
+    // absorbing sponge ahead of the outlet: relax density to ambient while
+    // keeping the local velocity, so vortices and pressure waves exit
+    // instead of reflecting back upstream at the shedding frequency
+    let edge = f32(P.nx - 1u - x);
+    let sw = max(0.0, 1.0 - edge / (f32(P.nx) / 16.0));
+    let sig = 0.25 * sw * sw;
     for (var k = 0u; k < 9u; k++) {
-      fout[k * N + idx] = f[k] - omega * (f[k] - fe[k]);
+      var fp = f[k] - omega * (f[k] - fe[k]);
+      if (sig > 0.0) { fp += sig * (feq(k, 1.0, u) - fp); }
+      fout[k * N + idx] = fp;
     }
   }
 

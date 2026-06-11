@@ -267,7 +267,8 @@ async function sampleDuct() {
     }
     return n ? { u: u / n, V: V / n, M: Ml / n, n } : null;
   };
-  state.ductMeas = { inlet: colAvg(4), exit: colAvg(nx - 5) };
+  // exit plane sits upstream of the LBM outlet sponge (last nx/16 columns)
+  state.ductMeas = { inlet: colAvg(4), exit: colAvg(nx - Math.round(nx / 16) - 4) };
   updateResultsDisplay();
   refreshValidation();
 }

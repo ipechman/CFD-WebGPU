@@ -5,6 +5,22 @@ Add new entries at the top of the changelog; pull backlog items from the list be
 
 ## Changelog
 
+### v0.1.14 — 2026-06-10
+- Fix: **periodic pressure waves from the LBM outflow** (user repro: S1223,
+  M0.12, Re 4e4, α14.5). The outlet copied each cell's own previous
+  populations — acoustically reflective, so every shed vortex fired a wave
+  back upstream at the shedding frequency, contaminating the whole domain
+  (probe row aft of the wing: mean Cp −2.4, σ 1.7, spikes to −8.6). Now an
+  absorbing sponge (last nx/16 columns, density→ambient with velocity kept)
+  plus spatial-extrapolation outflow. Same probe row after: mean +0.07,
+  σ 0.57 — only real vortex cores remain; the case now converges
+  (time-averaged, 31 chords) instead of hitting the cap.
+- The reflections had been *driving* the exaggerated shedding everywhere:
+  the 2412 M0.1 Re2e5 α4 anchor went from Cl 0.99±0.05 (52% high vs A&vD,
+  oscillating) to **0.591 steady-ish (9% low)** — the long-standing LBM
+  lift overshoot was largely outlet feedback.
+- Duct exit measurement plane moved upstream of the sponge.
+
 ### v0.1.13 — 2026-06-10
 - Add: **parametric ducts / nozzles / diffusers** (sidebar panel): set
   A_in/A_throat, A_exit/A_throat and the two cone lengths; the geometry is
